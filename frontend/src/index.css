@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  --color-background: #020617;
+  --color-card: #0b0f19;
+  --color-primary: #1e293b;
+  --color-accent: #22c55e;
+  --color-warning: #eab308;
+  --color-danger: #ef4444;
+  --color-border: #1e293b;
+
+  --font-mono: 'Fira Code', monospace;
+  --font-sans: 'Fira Sans', sans-serif;
+}
+
+body {
+  @apply bg-background text-slate-100 font-sans antialiased overflow-x-hidden;
+  margin: 0;
+}
+
+/* Glassmorphism utility card styling */
+.glass-card {
+  @apply bg-slate-900/60 backdrop-blur-md border border-slate-800/80 rounded-xl transition-all duration-300;
+}
+
+.glass-card:hover {
+  @apply border-slate-700/80 shadow-lg shadow-emerald-500/5;
+}
+
+/* Custom dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
