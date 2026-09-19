@@ -70,7 +70,7 @@ export const AIChat: React.FC = () => {
       }
     } catch (err) {
       console.error('Error in chat request:', err);
-      setMessages((prev) => [...prev, { role: 'assistant', message: 'Could not connect to AI Copilot. Ensure backend server is active.', created_at: new Date() }]);
+      setMessages((prev) => [...prev, { role: 'assistant', message: 'Could not reach the assessment backend. Ensure the server is active.', created_at: new Date() }]);
     } finally {
       setLoading(false);
     }
@@ -97,8 +97,8 @@ export const AIChat: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">AI Security Copilot</h2>
-        <p className="text-slate-400 text-sm">Ask question about scan findings, explain vulnerabilities or ask for code fixes.</p>
+        <h2 className="text-2xl font-bold tracking-tight text-white">Assessment Assistant</h2>
+        <p className="text-slate-400 text-sm">Deterministic, evidence-driven Q&amp;A over persisted scan findings. No fabricated answers.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -141,8 +141,8 @@ export const AIChat: React.FC = () => {
               <div className="h-full flex flex-col justify-center items-center text-center space-y-4 max-w-md mx-auto">
                 <Bot className="w-12 h-12 text-emerald-500 bg-slate-900 border border-slate-850 p-2 rounded-xl" />
                 <div>
-                  <h4 className="text-sm font-bold text-white">Ask anything about vulnerabilities</h4>
-                  <p className="text-slate-500 text-xs mt-1">CyberAgent AI Security copilot understands scan findings, vulnerabilities, and recommends clean fixes.</p>
+                  <h4 className="text-sm font-bold text-white">Ask about persisted vulnerabilities</h4>
+                  <p className="text-slate-500 text-xs mt-1">The Assessment Assistant replies only from evidence-backed findings recorded for the selected scan.</p>
                 </div>
                 
                 {/* Seed prompt options */}
@@ -182,7 +182,7 @@ export const AIChat: React.FC = () => {
                   <Bot className="w-4.5 h-4.5" />
                 </div>
                 <div className="bg-slate-950/40 border border-slate-900 p-4 rounded-xl text-xs text-slate-500 animate-pulse">
-                  CyberAgent AI is compiling vulnerability logs and remediation instructions...
+                  Compiling vulnerability context from persisted findings...
                 </div>
               </div>
             )}
@@ -192,7 +192,7 @@ export const AIChat: React.FC = () => {
           <form onSubmit={handleSend} className="flex gap-2 flex-shrink-0 border-t border-slate-900 pt-3">
             <input
               type="text"
-              placeholder={selectedScanId ? "Ask Copilot: 'Explain this vulnerability'..." : "Select scan session on the left to start chat"}
+              placeholder={selectedScanId ? "Ask the assistant: 'Explain this vulnerability'..." : "Select scan session on the left to start chat"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!selectedScanId || loading}

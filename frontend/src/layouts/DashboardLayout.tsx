@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Radio, FileText, Server, BookOpen, MessageSquare, Settings, ShieldAlert, LogOut } from 'lucide-react';
+import { LayoutDashboard, Radio, FileText, Server, BookOpen, MessageSquare, Settings, ShieldAlert, Cpu, LogOut } from 'lucide-react';
 import { apiFetch } from '../api';
 
 interface SidebarProps {
@@ -24,8 +24,9 @@ export const DashboardLayout: React.FC<SidebarProps> = ({ children, onLogout }) 
     { name: 'Scans History', path: '/scans', icon: ShieldAlert },
     { name: 'Assets', path: '/assets', icon: Server },
     { name: 'Reports', path: '/reports', icon: FileText },
-    { name: 'AI Chat', path: '/chat', icon: MessageSquare },
+    { name: 'Assessment Assistant', path: '/chat', icon: MessageSquare },
     { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
+    { name: 'Tool Health', path: '/tools', icon: Cpu },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
@@ -46,7 +47,7 @@ export const DashboardLayout: React.FC<SidebarProps> = ({ children, onLogout }) 
             </div>
             <div>
               <h1 className="font-bold tracking-wider text-base text-white">CyberAgent</h1>
-              <p className="text-[10px] text-emerald-500 uppercase tracking-widest font-semibold">AI Copilot</p>
+              <p className="text-[10px] text-emerald-500 uppercase tracking-widest font-semibold">Scan Platform</p>
             </div>
           </div>
 

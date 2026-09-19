@@ -71,7 +71,7 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-white">Welcome to CyberAgent</h1>
-            <p className="text-slate-400 text-xs mt-1">Autonomous AI-Powered Security Copilot</p>
+            <p className="text-slate-400 text-xs mt-1">Scope-gated, evidence-backed scan platform</p>
           </div>
         </div>
 

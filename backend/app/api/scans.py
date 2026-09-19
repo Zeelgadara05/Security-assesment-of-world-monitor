@@ -66,6 +66,12 @@ def _create_and_enqueue(db: Session, user: User, target: str, config: dict | Non
     new_scan.scan_config["simulation"] = simulation
     db.commit()
     db.refresh(new_scan)
+
+    # Seed the plan (total_tasks/planned list) at enqueue time so the plan is
+    # visible immediately, before the background worker thread has scheduled.
+    from app.agents.workflow import _seed_progress
+    _seed_progress(db, new_scan, new_scan.scan_config, simulation)
+
     trigger_background_scan(new_scan.id, simulation=simulation, config=new_scan.scan_config)
 
     return new_scan
