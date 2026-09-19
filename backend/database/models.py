@@ -93,11 +93,19 @@ class Scan(Base):
     tool_results = relationship("ToolResult", back_populates="scan", cascade="all, delete-orphan")
     vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")
     observations = relationship("Observation", back_populates="scan", cascade="all, delete-orphan")
+    assessment_tests = relationship("AssessmentTest", back_populates="scan", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="scan", cascade="all, delete-orphan")
     chats = relationship("ChatHistory", back_populates="scan", cascade="all, delete-orphan")
 
 
 class ToolResult(Base):
+    """Per-tool execution record.
+
+    Phase 4 persisted the coarse status + raw output.  Phase 5 adds execution
+    telemetry (version, redacted command, timing, exit code, output sizes and
+    how many observations the run parsed).  Commands stored here are always
+    redacted: no secrets, tokens, cookies or credentials are persisted.
+    """
     __tablename__ = "tool_results"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -105,6 +113,15 @@ class ToolResult(Base):
     tool_name = Column(String(50), nullable=False)  # "nmap", "nuclei", "subfinder", etc.
     status = Column(String(50), default="Pending")  # "Running", "Completed", "Failed"
     raw_output = Column(Text, default="")
+    tool_version = Column(String(100), nullable=True)
+    command_redacted = Column(Text, nullable=True)  # argument list with secrets redacted
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    exit_code = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    stdout_size = Column(Integer, nullable=True)
+    stderr_size = Column(Integer, nullable=True)
+    parsed_observations = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     scan = relationship("Scan", back_populates="tool_results")
@@ -136,8 +153,16 @@ class Vulnerability(Base):
     proof_of_concept = Column(Text, nullable=True)
     rule_id = Column(String(100), nullable=True)  # deterministic rule that produced this finding
     dedup_key = Column(String(255), nullable=True)  # stable identity used for duplicate suppression
-    confidence = Column(String(20), nullable=True)  # "intermediate" | "confirmed"
+    confidence = Column(String(20), nullable=True)  # Phase 3: "intermediate" | "confirmed"; Phase 5: LOW/MEDIUM/HIGH/CONFIRMED
     state = Column(String(50), nullable=False, default="NEW")  # NEW/CONFIRMED/FALSE_POSITIVE/DUPLICATE/ACCEPTED_RISK/RESOLVED
+    # Phase 5 assessment metadata (all optional; existing Phase 3 rows remain valid).
+    category = Column(String(100), nullable=True)  # vulnerability class, e.g. "authorization", "xss"
+    endpoint = Column(String(512), nullable=True)  # normalized endpoint the finding concerns
+    http_method = Column(String(20), nullable=True)  # GET/POST/...
+    source_test = Column(String(100), nullable=True)  # security test id that produced the candidate
+    source_tool = Column(String(100), nullable=True)  # observation-producing tool/probe
+    validation_reason = Column(Text, nullable=True)  # deterministic reason for confirm/reject
+    impact = Column(Text, nullable=True)  # documented impact statement
     evidence = Column(Text, nullable=True)  # human-readable support trail for the finding
     evidence_observation_ids = Column(JSON, nullable=True)  # ids of supporting Observation rows
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -145,19 +170,26 @@ class Vulnerability(Base):
     resolved_at = Column(DateTime, nullable=True)
 
     scan = relationship("Scan", back_populates="vulnerabilities")
+    evidence_records = relationship("FindingEvidence", back_populates="finding", cascade="all, delete-orphan")
 
 
 class Observation(Base):
     """A single, plugin-faithful factual observation captured by a real tool.
 
-    Observations are the only accepted source of evidence in Phase 3: findings
-    are derived exclusively from rows here.  ``kind`` names what was measured
-    (e.g. ``dns_record``, ``tcp_connect``, ``http_response``), ``subject`` is
-    the host/endpoint it measured, ``data_json`` holds the structured facts and
+    Observations are the only accepted source of evidence: findings are derived
+    exclusively from rows here.  ``kind`` names what was measured (e.g.
+    ``dns_record``, ``tcp_connect``, ``http_response``), ``subject`` is the
+    host/endpoint it measured, ``data_json`` holds the structured facts and
     ``raw_output`` the verbatim evidence snippet (response headers, resolved IP,
     DNS error, ...).  A probe that could not complete is recorded as an
     observation too (e.g. ``dns_error``, ``http_error``) so "nothing to report"
     is itself evidenced rather than silently dropped.
+
+    Phase 5 enriches each observation with an explicit ``observation_type``,
+    the owning ``user_id`` (denormalized so isolation can be queried directly),
+    the normalized ``target``/``asset``, an optional structured
+    ``request_json``/``response_json`` pair (headers redacted before storage),
+    ``fingerprint`` for stable deduplication, and a ``status``/``source``.
     """
     __tablename__ = "observations"
 
@@ -168,6 +200,19 @@ class Observation(Base):
     subject = Column(String(255), nullable=False)  # host / endpoint the fact concerns
     data_json = Column(JSON, default=dict)
     raw_output = Column(Text, default="")
+    # Phase 5 assessment fields (all optional/nullable for Phase 3 compatibility).
+    user_id = Column(String(255), nullable=True)  # owner of the scan (denormalized)
+    target = Column(String(255), nullable=True)  # normalized authorized target
+    asset = Column(String(255), nullable=True)  # host/asset the observation belongs to
+    observation_type = Column(String(50), nullable=True)  # see app.observations.types
+    source = Column(String(100), nullable=True)  # e.g. "external_tool", "http_client", "stdlib_probe"
+    tool_version = Column(String(100), nullable=True)
+    request_json = Column(JSON, nullable=True)  # structured HTTP request (redacted)
+    response_json = Column(JSON, nullable=True)  # structured HTTP response (redacted)
+    metadata_json = Column(JSON, nullable=True)
+    fingerprint = Column(String(64), nullable=True)  # stable SHA-256 of the observation identity
+    status = Column(String(50), nullable=True)  # observed | error | skipped | ...
+    observed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     scan = relationship("Scan", back_populates="observations")
@@ -198,3 +243,64 @@ class ChatHistory(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     scan = relationship("Scan", back_populates="chats")
+
+
+class AssessmentTest(Base):
+    """Deterministic record of one planned/executed security test on a scan.
+
+    Phase 5 planning persists every test the planner considered so coverage is
+    auditable: which tests were planned, applicable, skipped (and exactly why),
+    executed, validated, or failed.  ``reason`` is always a concrete,
+    deterministic explanation (never an LLM rationale).  A test is only counted
+    as executed when it actually ran, and only counted as validated when the
+    validator reached a confirmed/rejected verdict.
+    """
+    __tablename__ = "assessment_tests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    test_id = Column(String(100), nullable=False)  # stable test identifier, e.g. "http.security_headers"
+    name = Column(String(255), nullable=False)
+    category = Column(String(100), nullable=False)  # vulnerability class, e.g. "xss", "authorization"
+    status = Column(String(50), nullable=False, default="planned")
+    # planned | not_applicable | skipped | executed | validated | failed | rejected
+    reason = Column(Text, nullable=True)  # deterministic reason for the status
+    target = Column(String(255), nullable=True)
+    endpoint = Column(String(512), nullable=True)
+    http_method = Column(String(20), nullable=True)
+    active = Column(Boolean, default=False)  # True when the test mutates state
+    required_observations = Column(JSON, nullable=True)  # observation types the test consumed
+    required_capabilities = Column(JSON, nullable=True)  # tool/native capabilities required
+    observation_ids = Column(JSON, nullable=True)  # observations produced by this test
+    finding_ids = Column(JSON, nullable=True)  # findings created/confirmed by this test
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="assessment_tests")
+
+
+class FindingEvidence(Base):
+    """Structured evidence backing a finding.
+
+    Each record links a finding to the observation(s) that prove it and stores
+    the expected-vs-actual security-property comparison.  ``request_json`` and
+    ``response_json`` are always redacted before persistence (no cookies,
+    Authorization headers, API keys or tokens are ever stored in cleartext).
+    """
+    __tablename__ = "finding_evidence"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("vulnerabilities.id"), nullable=False)
+    observation_id = Column(Integer, ForeignKey("observations.id"), nullable=True)
+    evidence_type = Column(String(50), nullable=False)  # request|response|comparison|header|tool_output|certificate|authorization_difference
+    request_json = Column(JSON, nullable=True)
+    response_json = Column(JSON, nullable=True)
+    expected = Column(Text, nullable=True)
+    actual = Column(Text, nullable=True)
+    security_boundary = Column(Text, nullable=True)
+    redaction_status = Column(String(50), default="redacted")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    finding = relationship("Vulnerability", back_populates="evidence_records")
+    observation = relationship("Observation")

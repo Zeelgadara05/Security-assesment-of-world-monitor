@@ -350,6 +350,52 @@ export const Scans: React.FC = () => {
                   )}
                 </div>
 
+                {/* Phase 5 assessment coverage */}
+                {selectedScan.assessment?.coverage && (
+                  <div className="panel rounded-md p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Assessment coverage</h3>
+                      <span className="eyebrow">
+                        {selectedScan.assessment.coverage.findings_confirmed ?? 0} confirmed finding(s)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                      <KV label="Coverage" value={`${selectedScan.assessment.coverage.coverage_percent ?? '—'}%`} mono />
+                      <KV
+                        label="Tests executed"
+                        value={`${selectedScan.assessment.coverage.tests_executed ?? 0}/${selectedScan.assessment.coverage.tests_applicable ?? 0}`}
+                        mono
+                      />
+                      <KV label="Not applicable" value={String(selectedScan.assessment.coverage.tests_not_applicable ?? 0)} mono />
+                      <KV label="Observations" value={String(selectedScan.assessment.coverage.observations ?? 0)} mono />
+                    </div>
+                    {selectedScan.assessment.coverage.findings_confirmed === 0 && (
+                      <p className="text-[10.5px] text-faint mb-2">
+                        Zero confirmed findings is not the same as zero risk. Unevaluated areas are listed below.
+                      </p>
+                    )}
+                    {selectedScan.assessment.tests?.length > 0 && (
+                      <div className="space-y-1 max-h-52 overflow-y-auto">
+                        {selectedScan.assessment.tests.map((t: any) => (
+                          <div key={t.test_id} className="flex items-center gap-2 border border-line rounded px-2.5 py-1.5">
+                            <span className="mono-cell text-[10px] text-muted w-44 truncate">{t.test_id}</span>
+                            <span
+                              className={`mono-cell text-[9.5px] uppercase shrink-0 ${
+                                t.status === 'executed' ? 'text-accent' : t.status === 'failed' ? 'text-high' : 'text-faint'
+                              }`}
+                            >
+                              {t.status}
+                            </span>
+                            <span className="flex-1 min-w-0 text-[10px] text-faint truncate" title={t.reason || ''}>
+                              {t.reason || ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Tool pipeline */}
                 <div className="panel rounded-md p-4">
                   <div className="flex items-center justify-between mb-3">
@@ -488,6 +534,50 @@ const FindingDetail: React.FC<{ vuln: any }> = ({ vuln }) => (
             <span key={oid} className="mono-cell text-[10px] text-accent border border-line rounded px-2 py-0.5">
               observation #{oid}
             </span>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {(vuln.category || vuln.source_test) && (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <KV label="Category" value={vuln.category || '—'} mono />
+        <KV label="Source test" value={vuln.source_test || '—'} mono />
+        <KV label="Endpoint" value={vuln.endpoint ? `${vuln.http_method || ''} ${vuln.endpoint}` : '—'} />
+        <KV label="Security boundary" value={vuln.evidence_records?.[0]?.security_boundary || '—'} />
+      </div>
+    )}
+
+    {vuln.impact && (
+      <div>
+        <p className="eyebrow mb-1">Impact</p>
+        <p className="text-muted leading-relaxed">{vuln.impact}</p>
+      </div>
+    )}
+
+    {vuln.validation_reason && (
+      <div>
+        <p className="eyebrow mb-1">Deterministic validation</p>
+        <p className="text-muted leading-relaxed">{vuln.validation_reason}</p>
+      </div>
+    )}
+
+    {vuln.evidence_records?.length > 0 && (
+      <div>
+        <p className="eyebrow mb-1.5">Structured evidence</p>
+        <div className="space-y-1.5">
+          {vuln.evidence_records.map((e: any) => (
+            <div key={e.id} className="border border-line rounded p-2.5 text-[10.5px]">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="mono-cell text-[10px] text-accent">{e.evidence_type}</span>
+                {e.observation_id != null && (
+                  <span className="mono-cell text-[10px] text-faint">observation #{e.observation_id}</span>
+                )}
+                <span className="mono-cell text-[10px] text-faint">{e.redaction_status}</span>
+              </div>
+              <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
+              <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
+            </div>
           ))}
         </div>
       </div>

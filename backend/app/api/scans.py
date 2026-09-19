@@ -5,7 +5,7 @@ import asyncio
 import json
 import datetime
 from database.connection import get_db
-from database.models import Scan, Project, Vulnerability, ToolResult, Asset, Observation
+from database.models import Scan, Project, Vulnerability, ToolResult, Asset, Observation, AssessmentTest, FindingEvidence
 from database.schemas import ScanRequest
 from app.core.auth import (
     get_current_user,
@@ -290,6 +290,97 @@ def scan_summary(user: User = Depends(get_current_user), db: Session = Depends(g
     }
 
 
+def _assessment_coverage(db: Session, scan_id: int) -> dict | None:
+    """Phase 5 coverage summary persisted as the ``native_assessment`` tool result."""
+    row = (
+        db.query(ToolResult)
+        .filter(ToolResult.scan_id == scan_id, ToolResult.tool_name == "native_assessment")
+        .first()
+    )
+    if not row or not row.raw_output:
+        return None
+    try:
+        return json.loads(row.raw_output)
+    except (ValueError, TypeError):
+        return None
+
+
+def _assessment_tests(db: Session, scan_id: int) -> list[dict]:
+    rows = (
+        db.query(AssessmentTest)
+        .filter(AssessmentTest.scan_id == scan_id)
+        .order_by(AssessmentTest.id.asc())
+        .all()
+    )
+    return [
+        {
+            "test_id": t.test_id,
+            "name": t.name,
+            "category": t.category,
+            "status": t.status,
+            "reason": t.reason,
+            "active": bool(t.active),
+            "observation_ids": t.observation_ids or [],
+            "finding_ids": t.finding_ids or [],
+        }
+        for t in rows
+    ]
+
+
+def _finding_evidence(db: Session, finding_id: int) -> list[dict]:
+    rows = (
+        db.query(FindingEvidence)
+        .filter(FindingEvidence.finding_id == finding_id)
+        .order_by(FindingEvidence.id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": e.id,
+            "observation_id": e.observation_id,
+            "evidence_type": e.evidence_type,
+            "expected": e.expected,
+            "actual": e.actual,
+            "security_boundary": e.security_boundary,
+            "redaction_status": e.redaction_status,
+        }
+        for e in rows
+    ]
+
+
+def _vulnerability_dict(db: Session, v: Vulnerability) -> dict:
+    """Serialize a finding including Phase 5 assessment fields and evidence."""
+    return {
+        "id": v.id,
+        "title": v.title,
+        "severity": v.severity,
+        "description": v.description,
+        "remediation": v.remediation,
+        "cve": v.cve,
+        "cvss": v.cvss,
+        "owasp": v.owasp,
+        "mitre": v.mitre,
+        "cwe": v.cwe,
+        "rule_id": v.rule_id,
+        "state": v.state or "NEW",
+        "confidence": v.confidence,
+        "target": v.target,
+        "proof_of_concept": v.proof_of_concept,
+        "evidence": v.evidence,
+        "evidence_observation_ids": v.evidence_observation_ids or [],
+        "resolved_at": v.resolved_at,
+        # Phase 5 assessment metadata (null for Phase 3 findings).
+        "category": v.category,
+        "endpoint": v.endpoint,
+        "http_method": v.http_method,
+        "source_test": v.source_test,
+        "source_tool": v.source_tool,
+        "validation_reason": v.validation_reason,
+        "impact": v.impact,
+        "evidence_records": _finding_evidence(db, v.id),
+    }
+
+
 @router.get("/{scan_id}")
 def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Full scan detail: lifecycle stage, progress, coverage, findings, tools."""
@@ -314,30 +405,12 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
         "error": scan.error,
         "logs": scan.logs,
         "simulation": bool((scan.scan_config or {}).get("simulation", settings.simulation_mode)),
-        "vulnerabilities": [
-            {
-                "id": v.id,
-                "title": v.title,
-                "severity": v.severity,
-                "description": v.description,
-                "remediation": v.remediation,
-                "cve": v.cve,
-                "cvss": v.cvss,
-                "owasp": v.owasp,
-                "mitre": v.mitre,
-                "cwe": v.cwe,
-                "rule_id": v.rule_id,
-                "state": v.state or "NEW",
-                "confidence": v.confidence,
-                "target": v.target,
-                "proof_of_concept": v.proof_of_concept,
-                "evidence": v.evidence,
-                "evidence_observation_ids": v.evidence_observation_ids or [],
-                "resolved_at": v.resolved_at,
-            }
-            for v in vulnerabilities
-        ],
+        "vulnerabilities": [_vulnerability_dict(db, v) for v in vulnerabilities],
         "observations_count": observations,
+        "assessment": {
+            "coverage": _assessment_coverage(db, scan_id),
+            "tests": _assessment_tests(db, scan_id),
+        },
         "tools": [
             {"name": tr.tool_name, "status": tr.status, "raw_output": tr.raw_output}
             for tr in tool_results
@@ -352,7 +425,10 @@ def get_scan_observations(scan_id: int, user: User = Depends(get_current_user), 
     rows = db.query(Observation).filter(Observation.scan_id == scan_id).order_by(Observation.id.asc()).all()
     return [
         {"id": o.id, "tool": o.tool_name, "kind": o.kind, "subject": o.subject,
-         "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at}
+         "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at,
+         "observation_type": o.observation_type or o.kind, "source": o.source,
+         "status": o.status, "fingerprint": o.fingerprint,
+         "request": o.request_json, "response": o.response_json}
         for o in rows
     ]
 
@@ -362,14 +438,7 @@ def get_scan_findings(scan_id: int, user: User = Depends(get_current_user), db: 
     """Persisted findings (evidence-backed) for a scan owned by the user."""
     get_owned_scan(db, user, scan_id)
     rows = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).order_by(Vulnerability.id.asc()).all()
-    return [
-        {"id": v.id, "title": v.title, "severity": v.severity, "state": v.state or "NEW",
-         "rule_id": v.rule_id, "cve": v.cve, "cvss": v.cvss, "cwe": v.cwe, "owasp": v.owasp,
-         "target": v.target, "evidence": v.evidence,
-         "evidence_observation_ids": v.evidence_observation_ids or [],
-         "proof_of_concept": v.proof_of_concept, "remediation": v.remediation}
-        for v in rows
-    ]
+    return [_vulnerability_dict(db, v) for v in rows]
 
 
 @router.get("/{scan_id}/coverage")
@@ -389,6 +458,7 @@ def get_scan_coverage(scan_id: int, user: User = Depends(get_current_user), db: 
         "percent": progress.get("percent", 0),
         "planned_tasks": progress.get("planned_tasks", []),
         "security_score": scan.security_score,
+        "assessment": _assessment_coverage(db, scan.id),
     }
 
 

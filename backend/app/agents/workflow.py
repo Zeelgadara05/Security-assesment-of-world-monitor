@@ -57,6 +57,15 @@ def _merge_config(requested: dict | None, stored: dict | None) -> dict:
     severity = str(req.get("severity") or base.get("severity") or "all").lower()
     base["severity"] = severity if severity in SEVERITY_THRESHOLD else "all"
     base["profile"] = str(req.get("profile") or base.get("profile") or "steady")
+    # Phase 5: active testing is opt-in and off by default; the assessment engine
+    # itself is on by default.  Optional assessment inputs are passed through.
+    base["active_testing"] = bool(req.get("active_testing", base.get("active_testing", False)))
+    if "assessment_engine" in req:
+        base["assessment_engine"] = bool(req.get("assessment_engine"))
+    for key in ("auth_identities", "ssrf_validation_url", "ssrf_token", "jwt_tokens",
+                "jwt_alg_none_accepted", "installed_tools", "tools_missing"):
+        if key in req:
+            base[key] = req[key]
     return base
 
 
@@ -275,6 +284,35 @@ def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None 
                 f"from {len(findings)} persisted finding(s): {scan.security_score}/100\n"
             )
             db.commit()
+
+            # Phase 5 assessment engine: deterministic tests over the same
+            # persisted observations.  Active (mutating) testing is opt-in via
+            # config["active_testing"]; requests are scope-guarded and no finding
+            # is ever fabricated.  Inapplicable tests are reported as coverage.
+            try:
+                from app.assess import engine as assessment_engine
+
+                summary = assessment_engine.run_assessment(db, scan, simulation=False, config=config)
+                if summary.get("executed"):
+                    cov = summary.get("coverage") or {}
+                    scan.logs += (
+                        f"[Assessment] Phase 5 engine ran {cov.get('tests_executed', 0)}/"
+                        f"{cov.get('tests_applicable', 0)} applicable test(s) "
+                        f"(active_testing={summary.get('active_testing')}); "
+                        f"coverage {cov.get('coverage_percent')}%; "
+                        f"{summary.get('findings_confirmed', 0)} confirmed finding(s). "
+                        "Unevaluated areas are reported as coverage, never as zero risk.\n"
+                    )
+                    findings = db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).all()
+                    finding_dicts = [{"severity": f.severity or "Info", "state": f.state or "NEW"} for f in findings]
+                    scan.security_score = finding_rules.compute_score(finding_dicts)
+                else:
+                    scan.logs += f"[Assessment] Phase 5 engine not executed: {summary.get('reason')}.\n"
+                db.commit()
+            except Exception as exc:  # a failure here must never fail the scan
+                logger.warning(f"Phase 5 assessment engine failed for scan {scan.id}: {exc}")
+                scan.logs += f"[Assessment] Phase 5 engine skipped after error: {exc}\n"
+                db.commit()
 
         # ----------------------------------------------------
         # REPORTING stage -- strictly downstream of persisted data
