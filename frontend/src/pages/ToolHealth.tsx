@@ -1,6 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Cpu, CheckCircle, XCircle, RefreshCw, Activity, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Cpu, CheckCircle2, Ban, Activity, RotateCw } from 'lucide-react';
 import { apiFetch } from '../api';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge } from '../components/StatusBadge';
+import { EmptyState } from '../components/EmptyState';
+import { ErrorState } from '../components/ErrorState';
+import { Skeleton } from '../components/Skeleton';
 
 const CATEGORY_LABELS: Record<string, string> = {
   recon: 'Recon',
@@ -8,7 +13,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   service: 'Service',
   http: 'HTTP',
   vulnerability: 'Vulnerability',
-  probe: 'Stdlib Probe',
+  probe: 'Stdlib probe',
 };
 
 export const ToolHealth: React.FC = () => {
@@ -16,7 +21,7 @@ export const ToolHealth: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchInventory = async () => {
+  const fetchInventory = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -32,11 +37,11 @@ export const ToolHealth: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchInventory();
-  }, []);
+  }, [fetchInventory]);
 
   const tools = data?.tools ?? [];
   const installed = tools.filter((t) => t.installed).length;
@@ -45,114 +50,132 @@ export const ToolHealth: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">Tool Health</h2>
-          <p className="text-slate-400 text-sm">Live scanner availability. Detection is honest — via real <code className="font-mono">shutil.which</code> probes on the host.</p>
-        </div>
-        <button
-          onClick={fetchInventory}
-          className="flex items-center gap-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors text-slate-300"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Re-probe</span>
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="Intelligence / Tool Health"
+        title="Tool health"
+        description="Live scanner availability. Detection is honest — via real shutil.which probes on the host."
+        actions={
+          <button
+            onClick={fetchInventory}
+            className="inline-flex items-center gap-1.5 text-[11px] border border-line rounded px-2.5 py-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors cursor-pointer"
+          >
+            <RotateCw className="w-3 h-3" aria-hidden="true" />
+            Re-probe
+          </button>
+        }
+      />
 
-      {error && (
-        <div className="flex gap-2 bg-red-950/20 border border-red-800/20 p-3 rounded-lg text-xs text-red-400">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Summary metric */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="glass-card p-5 flex flex-col justify-between h-28">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Registered Tools</span>
-            <Cpu className="w-5 h-5 text-emerald-500" />
+      {error ? (
+        <ErrorState message={error} onRetry={fetchInventory} />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Tile
+              label="Registered tools"
+              icon={<Cpu className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+              value={tools.length}
+              loading={loading}
+            />
+            <Tile
+              label="Installed / callable"
+              icon={<CheckCircle2 className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+              value={installed}
+              loading={loading}
+            />
+            <Tile
+              label="Missing / not installed"
+              icon={<Ban className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+              value={missing}
+              loading={loading}
+            />
           </div>
-          <span className="text-4xl font-extrabold text-white">{tools.length}</span>
-        </div>
-        <div className="glass-card p-5 flex flex-col justify-between h-28">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Installed / Callable</span>
-            <CheckCircle className="w-5 h-5 text-emerald-500" />
-          </div>
-          <span className="text-4xl font-extrabold text-emerald-500">{installed}</span>
-        </div>
-        <div className="glass-card p-5 flex flex-col justify-between h-28">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Missing / Not Installed</span>
-            <XCircle className="w-5 h-5 text-amber-500" />
-          </div>
-          <span className="text-4xl font-extrabold text-amber-500">{missing}</span>
-        </div>
-      </div>
 
-      {data && (
-        <div className="glass-card p-4 flex items-center gap-3 text-xs">
-          <Activity className="w-4 h-4 text-emerald-500" />
-          <span className="text-slate-300">
-            Execution mode: <strong className="font-mono text-white">{data.simulation_mode ? 'SIMULATION' : 'REAL'}</strong>
-          </span>
-          <span className="text-slate-600">— {data.simulation_mode ? 'adapters emit simulated outcomes.' : 'missing binaries are reported as NOT INSTALLED and never faked.'}</span>
-        </div>
-      )}
-
-      {/* Tool cards grouped by category */}
-      <div className="space-y-6">
-        {loading ? (
-          <div className="text-slate-500 text-xs text-center py-16">Probing tool binaries...</div>
-        ) : (
-          categories.map((cat) => (
-            <div key={cat} className="space-y-2">
-              <h3 className="text-sm font-semibold text-slate-300">{CATEGORY_LABELS[cat] || cat}</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {tools.filter((t) => t.category === cat).map((tool) => (
-                  <div
-                    key={tool.tool}
-                    className={`glass-card p-4 flex items-start justify-between gap-3 border ${
-                      tool.installed ? 'border-slate-850' : 'border-slate-900 opacity-80'
-                    }`}
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tool.installed ? 'bg-emerald-500' : 'bg-amber-500/70'}`} />
-                        <span className="font-mono text-xs font-bold text-white">{tool.tool}</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 space-y-0.5">
-                        {tool.binary && (
-                          <p>binary: <code className="font-mono text-slate-400">{tool.binary}</code></p>
-                        )}
-                        {tool.version && (
-                          <p>version: <code className="font-mono text-emerald-400">{tool.version}</code></p>
-                        )}
-                        {tool.path && (
-                          <p className="truncate" title={tool.path}>path: <code className="font-mono text-slate-400">{tool.path}</code></p>
-                        )}
-                        {(tool.note || (!tool.installed && !tool.binary)) && (
-                          <p className="text-amber-400/80">{tool.note || 'stdlib probe — no external binary required'}</p>
-                        )}
-                      </div>
-                    </div>
-                    <span
-                      className={`text-[9px] px-2 py-0.5 rounded-full font-bold border flex-shrink-0 ${
-                        tool.installed
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                      }`}
-                    >
-                      {tool.installed ? 'INSTALLED' : 'NOT INSTALLED'}
-                    </span>
-                  </div>
-                ))}
-              </div>
+          {data && (
+            <div className="panel rounded-md p-3 flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
+              <Activity className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
+              <span>
+                Execution mode: <StatusBadge status={data.simulation_mode ? 'Running' : 'Completed'} label={data.simulation_mode ? 'Simulation' : 'Live'} />
+              </span>
+              <span className="text-faint">
+                {data.simulation_mode
+                  ? '— adapters emit simulated outcomes.'
+                  : '— missing binaries are reported as NOT INSTALLED and never faked.'}
+              </span>
             </div>
-          ))
-        )}
-      </div>
+          )}
+
+          {loading ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 w-full rounded" />
+              ))}
+            </div>
+          ) : tools.length === 0 ? (
+            <EmptyState title="No tools registered" description="The inventory endpoint reported no scanners." />
+          ) : (
+            <div className="space-y-5">
+              {categories.map((cat) => (
+                <div key={cat}>
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">
+                    {CATEGORY_LABELS[cat] || cat}
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {tools
+                      .filter((t) => t.category === cat)
+                      .map((tool) => (
+                        <div key={tool.tool} className="panel rounded-md p-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <StatusBadge status={tool.installed ? 'Completed' : 'Failed'} label="" />
+                              <span className="mono-cell text-[11.5px] font-semibold text-text">{tool.tool}</span>
+                            </div>
+                            <div className="text-[10.5px] text-faint space-y-0.5">
+                              {tool.binary && (
+                                <p className="truncate">binary: <code className="font-mono text-muted">{tool.binary}</code></p>
+                              )}
+                              {tool.version && (
+                                <p>version: <code className="font-mono text-accent">{tool.version}</code></p>
+                              )}
+                              {tool.path && <p className="truncate" title={tool.path}>path: <code className="font-mono text-muted">{tool.path}</code></p>}
+                              {(tool.note || (!tool.installed && !tool.binary)) && (
+                                <p className="text-medium/80">{tool.note || 'stdlib probe — no external binary required'}</p>
+                              )}
+                            </div>
+                          </div>
+                          <span
+                            className={`shrink-0 mono-cell text-[9px] px-2 py-0.5 rounded-full border ${
+                              tool.installed
+                                ? 'text-accent border-accent/40 bg-accent/10'
+                                : 'text-medium border-medium/40 bg-medium/10'
+                            }`}
+                          >
+                            {tool.installed ? 'INSTALLED' : 'NOT INSTALLED'}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
+
+const Tile: React.FC<{ label: string; icon: React.ReactNode; value: number; loading?: boolean }> = ({ label, icon, value, loading }) => (
+  <div className="panel rounded-md p-4 flex items-center gap-3">
+    <span className="w-9 h-9 rounded-md border border-line bg-surface-2 flex items-center justify-center text-accent">
+      {icon}
+    </span>
+    <div>
+      <p className="eyebrow mb-0.5">{label}</p>
+      {loading ? (
+        <Skeleton className="h-6 w-10" />
+      ) : (
+        <span className="text-xl font-semibold text-text leading-none">{value}</span>
+      )}
+    </div>
+  </div>
+);

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Lock, Mail, UserPlus, ArrowRight, AlertCircle } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, ScanSearch, AlertCircle } from 'lucide-react';
 import { apiFetch, setToken } from '../api';
+import { Input } from '../components/Field';
+import { Button } from '../components/Button';
 
 interface AuthProps {
   onLoginSuccess: () => void;
@@ -21,13 +23,12 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
     setError('');
 
     const path = isSignUp ? '/auth/register' : '/auth/login';
-    const options = {
-      method: 'POST',
-      body: JSON.stringify({ email: email.trim(), password }),
-    };
 
     try {
-      const res = await apiFetch(path, options);
+      const res = await apiFetch(path, {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
 
       if (res.status === 401 || res.status === 403 || res.status === 409) {
         const errData = await res.json().catch(() => null);
@@ -52,87 +53,112 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
 
       setToken(data.token);
       onLoginSuccess();
-    } catch (err) {
-      setError('Cannot reach the backend server. Is uvicorn running on 127.0.0.1:8001?');
+    } catch {
+      setError('Cannot reach the backend server. Ensure it is running and reachable.');
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-background text-slate-100 font-sans relative px-4">
-      {/* Decorative grid bg */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#0f172a_1px,transparent_1px),linear-gradient(to_bottom,#0f172a_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-30 pointer-events-none" />
-
-      <div className="w-full max-w-md glass-card p-8 space-y-6 relative z-10">
-        {/* Brand */}
-        <div className="flex flex-col items-center text-center space-y-2">
-          <div className="w-16 h-16 rounded-2xl overflow-hidden flex items-center justify-center shadow-xl shadow-slate-900/50 border border-slate-800/80 mb-2">
-            <img src="/logo.png" alt="CyberAgent Logo" className="w-full h-full object-cover" />
-          </div>
+    <div className="flex min-h-[100dvh] items-center justify-center bg-bg px-4 py-10 font-sans text-text">
+      <div className="grid w-full max-w-[880px] grid-cols-1 md:grid-cols-2 border border-line rounded-lg overflow-hidden bg-surface">
+        {/* Intro / brand side */}
+        <div className="hidden md:flex flex-col justify-between p-8 bg-surface-2 border-r border-line">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Welcome to CyberAgent</h1>
-            <p className="text-slate-400 text-xs mt-1">Scope-gated, evidence-backed scan platform</p>
+            <div className="flex items-center gap-2.5 mb-8">
+              <span className="w-8 h-8 rounded overflow-hidden border border-line flex items-center justify-center">
+                <img src="/logo.png" alt="" className="w-full h-full object-cover" />
+              </span>
+              <div className="leading-none">
+                <span className="text-sm font-semibold tracking-tight">CyberAgent</span>
+                <span className="block text-[9px] text-faint font-mono uppercase tracking-[0.18em] mt-1">
+                  Scan Platform
+                </span>
+              </div>
+            </div>
+
+            <span className="eyebrow mb-3 block">Scope-gated Assessment</span>
+            <h2 className="text-xl font-semibold leading-snug text-text">
+              Automated security assessments, backed by evidence.
+            </h2>
+            <p className="text-[12.5px] text-muted leading-relaxed mt-3">
+              Orchestrate your declared scanning tooling against authorized targets only. Every finding is created from
+              real tool observations — never invented.
+            </p>
           </div>
+
+          <ul className="space-y-2.5">
+            <li className="flex items-center gap-2.5 text-[12px] text-muted">
+              <ScanSearch className="w-4 h-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
+              Stage-driven asynchronous scan pipeline
+            </li>
+            <li className="flex items-center gap-2.5 text-[12px] text-muted">
+              <ShieldCheck className="w-4 h-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
+              Authorized-scope enforcement on every trigger
+            </li>
+          </ul>
         </div>
 
-        {/* Input Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs text-slate-400 font-medium">Work Email Address</label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-2.5 w-4 h-4 text-slate-600" />
-              <input
-                type="email"
-                required
-                placeholder="you@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-900 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:border-emerald-500/80 transition-colors"
-              />
-            </div>
+        {/* Form side */}
+        <div className="p-8 sm:p-10">
+          <span className="eyebrow mb-2 block">{isSignUp ? 'Registration' : 'Gate Access'}</span>
+          <h1 className="text-lg font-semibold text-text">
+            {isSignUp ? 'Create corporate account' : 'Sign in to your workspace'}
+          </h1>
+          <p className="text-[12px] text-muted mt-1 mb-6">
+            {isSignUp ? 'Register with your work email to operate the scan platform.' : 'Authenticate to access assessment operations.'}
+          </p>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Input
+              label="Work email"
+              type="email"
+              required
+              autoComplete="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <Input
+              label="Password"
+              type="password"
+              required
+              minLength={8}
+              autoComplete={isSignUp ? 'new-password' : 'current-password'}
+              placeholder={isSignUp ? 'At least 8 characters' : '••••••••••••'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+
+            {error && (
+              <div className="flex gap-2 border border-critical/40 bg-critical/10 rounded px-3 py-2.5 text-[11px] text-critical">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <Button type="submit" variant="primary" disabled={loading} className="w-full">
+              {loading ? 'Authenticating…' : isSignUp ? 'Create account' : 'Sign in'}
+              {!loading && <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />}
+            </Button>
+          </form>
+
+          <div className="mt-5 pt-4 border-t border-line flex items-center gap-1.5 text-[11px] text-faint">
+            <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <span>
+              {isSignUp ? 'Already registered? ' : 'Need access? '}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSignUp((v) => !v);
+                  setError('');
+                }}
+                className="text-muted hover:text-text underline underline-offset-2 cursor-pointer transition-colors"
+              >
+                {isSignUp ? 'Sign in here' : 'Sign up here'}
+              </button>
+            </span>
           </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-slate-400 font-medium">Security Password</label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-2.5 w-4 h-4 text-slate-600" />
-              <input
-                type="password"
-                required
-                minLength={8}
-                placeholder={isSignUp ? 'At least 8 characters' : '••••••••••••'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-900 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:border-emerald-500/80 transition-colors"
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="flex gap-2 bg-red-950/20 border border-red-800/20 p-3 rounded-lg text-[10px] text-red-400">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-slate-955 font-bold text-xs px-4 py-2.5 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-lg shadow-emerald-500/10"
-          >
-            <span>{loading ? 'Authenticating...' : isSignUp ? 'Create Corporate Account' : 'Authenticate Session'}</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </form>
-
-        {/* Foot switch link */}
-        <div className="text-center pt-2">
-          <button
-            onClick={() => setIsSignUp(!isSignUp)}
-            className="text-[10px] text-slate-500 hover:text-slate-300 font-medium transition-colors cursor-pointer"
-          >
-            {isSignUp ? 'Already registered? Log in here' : 'Need corporate access? Sign up here'}
-          </button>
         </div>
       </div>
     </div>

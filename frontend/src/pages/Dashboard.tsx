@@ -1,14 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Play, ArrowRight, ShieldCheck, Activity, Award, CheckCircle, RefreshCw } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Radar, AlertTriangle, Target } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge } from '../components/StatusBadge';
+import { SeverityText } from '../components/SeverityBadge';
+import { EmptyState } from '../components/EmptyState';
+import { ErrorState } from '../components/ErrorState';
+import { Skeleton, SkeletonTable } from '../components/Skeleton';
+import { DataTable } from '../components/DataTable';
+import { relativeTime } from '../components/format';
 
 export const Dashboard: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    setLoading(true);
     try {
       const [scanRes, summaryRes] = await Promise.all([
         apiFetch('/scans/list'),
@@ -16,271 +26,279 @@ export const Dashboard: React.FC = () => {
       ]);
       if (scanRes.ok) {
         setScans(await scanRes.json());
+        setError('');
+      } else if (!summaryRes.ok) {
+        const errData = await summaryRes.json().catch(() => null);
+        setError(errData?.detail || 'Failed to load assessment data.');
       }
       if (summaryRes.ok) {
         setSummary(await summaryRes.json());
       }
-    } catch (err) {
-      console.error('Error fetching dashboard data:', err);
+    } catch {
+      setError('Server connection failed.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
-  // Compute metrics based on scans
-  const activeScans = scans.filter((s) => s.status === 'Running').length;
-  const completedScans = scans.filter((s) => s.status === 'Completed').length;
-  const averageScore = (summary?.score_history?.length ?? 0) > 0
-    ? Math.round(summary.score_history.reduce((acc: number, s: any) => acc + (s.score ?? 100), 0) / summary.score_history.length)
-    : null;
-  const openFindings = summary?.open_findings ?? 0;
+  const latestScans = (raw: any[], count = 6) =>
+    [...raw].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, count);
 
-  // Real analytical data, derived from persisted findings/assets
-  const trendData = (summary?.score_history ?? []).map((s: any) => ({
-    name: s.target,
-    score: s.score ?? 100,
-  }));
-
-  const severityColors: Record<string, string> = {
-    Critical: '#ef4444',
-    High: '#f97316',
-    Medium: '#eab308',
-    Low: '#3b82f6',
-    Info: '#64748b',
-  };
-  const severityPieData = (Object.entries(summary?.severity_distribution ?? {}) as [string, number][])
-    .filter(([, count]) => count > 0)
-    .map(([name, count]) => ({ name, value: count, color: severityColors[name] ?? '#64748b' }));
-
-  const portsData = (summary?.open_ports ?? []).map((p: string) => ({ name: p, count: 1 }));
+  const navigate = useNavigate();
 
   return (
     <div className="space-y-6">
-      {/* Header banner */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">Dashboard Overview</h2>
-          <p className="text-slate-400 text-sm">Security posture and active scan operations monitor.</p>
-        </div>
-        <button
-          onClick={fetchData}
-          className="flex items-center gap-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors text-slate-300"
+      <PageHeader
+        eyebrow="Operations / Overview"
+        title="Assessment overview"
+        description="Live status of scan operations, latest assessments, and open findings."
+        actions={
+          <Link to="/scan/new" className="no-underline">
+            <span className="inline-flex items-center gap-1.5 bg-accent text-[#062b20] border border-accent rounded px-3 py-1.5 text-[11.5px] font-medium hover:bg-accent/85 transition-colors">
+              <Radar className="w-3.5 h-3.5" />
+              New Assessment
+            </span>
+          </Link>
+        }
+      />
+
+      {/* Stat tiles */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatTile
+          label="Assessments Run"
+          icon={<Target className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+          loading={loading}
+          iconTone="text-accent"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh Data</span>
-        </button>
+          {scans.length}
+          <span className="text-[10px] text-faint">total</span>
+        </StatTile>
+        <StatTile
+          label="Open Findings"
+          icon={<AlertTriangle className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+          loading={loading}
+          iconTone="text-critical"
+        >
+          {summary?.open_findings ?? 0}
+        </StatTile>
+        <StatTile
+          label="Avg Security Score"
+          icon={<Target className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+          loading={loading}
+          iconTone="text-accent"
+        >
+          {avgScore(summary?.score_history)}
+          <span className="text-[10px] text-faint">/100</span>
+        </StatTile>
+        <StatTile
+          label="Open Ports"
+          icon={<Target className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />}
+          loading={loading}
+          iconTone="text-low"
+        >
+          {summary?.open_ports_total ?? 0}
+        </StatTile>
       </div>
 
-      {/* Metrics Row */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="glass-card p-5 flex flex-col justify-between h-32">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Security Score</span>
-            <Award className="w-5 h-5 text-emerald-500" />
+      {/* Summary + severity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="panel rounded-md p-4 lg:col-span-2">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Security Score Trend</h2>
+            <span className="eyebrow">Last assessments</span>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">{averageScore ?? '--'}</span>
-            <span className="text-xs text-slate-500">/100 avg</span>
-          </div>
+          {loading ? (
+            <Skeleton className="h-32 w-full" />
+          ) : (summary?.score_history ?? []).length === 0 ? (
+            <EmptyState
+              title="No score history yet"
+              description="Run your first assessment to plot the security score trend."
+              action={
+                <Link to="/scan/new">
+                  <span className="inline-flex items-center gap-1.5 border border-line rounded px-2.5 py-1.5 text-[11px] text-muted hover:text-text hover:bg-surface-2 transition-colors">
+                    Start assessment
+                  </span>
+                </Link>
+              }
+            />
+          ) : (
+            <ScoreBars history={summary.score_history} />
+          )}
         </div>
 
-        <div className="glass-card p-5 flex flex-col justify-between h-32">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Active Scans</span>
-            <Activity className="w-5 h-5 text-amber-500" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">{activeScans}</span>
-            <span className="text-xs text-slate-500">running currently</span>
-          </div>
-        </div>
-
-        <div className="glass-card p-5 flex flex-col justify-between h-32">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Scans Completed</span>
-            <CheckCircle className="w-5 h-5 text-emerald-500" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">{completedScans}</span>
-            <span className="text-xs text-slate-500">total historical</span>
-          </div>
-        </div>
-
-        <div className="glass-card p-5 flex flex-col justify-between h-32">
-          <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Open Findings</span>
-            <ShieldAlert className="w-5 h-5 text-red-500" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">{openFindings}</span>
-            <span className="text-xs text-red-400 font-medium">evidence-backed</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Visualizations Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Security Score Trend Chart */}
-        <div className="glass-card p-5 lg:col-span-2 space-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-300">Security Score History</h3>
-            <p className="text-slate-500 text-xs">Timeline of security rating across scans.</p>
-          </div>
-          <div className="h-64 w-full">
-            {trendData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-slate-500 text-sm">No scan history yet.</div>
-            ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData}>
-                <defs>
-                  <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} />
-                <YAxis domain={[0, 100]} stroke="#64748b" fontSize={10} tickLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} />
-                <Area type="monotone" dataKey="score" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorScore)" />
-              </AreaChart>
-            </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {/* Severity Distribution Pie */}
-        <div className="glass-card p-5 space-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-300">Vulnerabilities Severity</h3>
-            <p className="text-slate-500 text-xs">Active vulnerability findings breakdown.</p>
-          </div>
-          <div className="h-48 flex justify-center items-center">
-            {severityPieData.length === 0 ? (
-              <div className="text-slate-500 text-sm">No open findings.</div>
-            ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={severityPieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {severityPieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }} />
-              </PieChart>
-            </ResponsiveContainer>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            {severityPieData.map((item) => (
-              <div key={item.name} className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                <span className="text-slate-400 font-medium">{item.name}</span>
-              </div>
-            ))}
-          </div>
+        <div className="panel rounded-md p-4">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-3">Severity Distribution</h2>
+          {loading ? (
+            <Skeleton className="h-32 w-full" />
+          ) : (
+            <SeverityBreakdown dist={summary?.severity_distribution ?? {}} />
+          )}
         </div>
       </div>
 
-      {/* Grid: Open Ports & Recent Scans */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Open Ports Bar Chart */}
-        <div className="glass-card p-5 space-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-300">Discovered Open Ports</h3>
-            <p className="text-slate-500 text-xs">Frequency of network ports found listening.</p>
-          </div>
-          <div className="h-64 w-full">
-            {portsData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-slate-500 text-sm">No open ports discovered.</div>
-            ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={portsData}>
-                <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} />
-                <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }} />
-                <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-            )}
-          </div>
+      {/* Recent scans */}
+      <div className="panel rounded-md overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Recent Assessments</h2>
+          <Link to="/scans" className="text-[11px] text-accent hover:text-accent/80 no-underline font-medium">
+            View all
+          </Link>
         </div>
-
-        {/* Recent Scans table */}
-        <div className="glass-card p-5 lg:col-span-2 space-y-4">
-          <div className="flex justify-between items-center">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-300">Recent Scanning Tasks</h3>
-              <p className="text-slate-500 text-xs">Recent security checks triggered.</p>
-            </div>
-            <a href="/scans" className="text-emerald-500 hover:text-emerald-400 text-xs font-semibold flex items-center gap-1 cursor-pointer">
-              <span>View All</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </a>
+        {error ? (
+          <div className="px-4 pb-4">
+            <ErrorState message={error} onRetry={fetchData} />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2.5 font-semibold">Target Domain / IP</th>
-                  <th className="py-2.5 font-semibold">Status</th>
-                  <th className="py-2.5 font-semibold">Score</th>
-                  <th className="py-2.5 font-semibold">Triggered</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                {loading ? (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-center text-slate-500">Loading scans...</td>
-                  </tr>
-                ) : scans.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-center text-slate-500">No scans triggered yet. Go to "New Scan" to start.</td>
-                  </tr>
-                ) : (
-                  scans.slice(0, 5).map((scan) => (
-                    <tr key={scan.id} className="hover:bg-slate-900/40">
-                      <td className="py-3 font-semibold text-white">{scan.target}</td>
-                      <td className="py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                          scan.status === 'Completed' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' :
-                          scan.status === 'Running' ? 'bg-amber-500/10 border-amber-500/20 text-amber-500 animate-pulse' :
-                          scan.status === 'Failed' ? 'bg-red-500/10 border-red-500/20 text-red-500' :
-                          'bg-slate-500/10 border-slate-500/20 text-slate-400'
-                        }`}>
-                          {scan.status}
-                        </span>
-                      </td>
-                      <td className="py-3">
-                        <span className={`font-semibold ${
-                          scan.security_score >= 80 ? 'text-emerald-500' :
-                          scan.security_score >= 50 ? 'text-warning' : 'text-danger'
-                        }`}>
-                          {scan.security_score ?? 'Pending'}
-                        </span>
-                      </td>
-                      <td className="py-3 text-slate-500">{new Date(scan.created_at).toLocaleTimeString()}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+        ) : loading ? (
+          <div className="px-4 pb-4"><SkeletonTable rows={4} /></div>
+        ) : scans.length === 0 ? (
+          <div className="px-4 pb-4">
+            <EmptyState
+              title="No assessments yet"
+              description="Queue your first scan pipeline to start collecting evidence-backed findings."
+              action={
+                <Link to="/scan/new">
+                  <span className="inline-flex items-center gap-1.5 border border-line rounded px-2.5 py-1.5 text-[11px] text-muted hover:text-text hover:bg-surface-2 transition-colors">
+                    Queue scan
+                  </span>
+                </Link>
+              }
+            />
           </div>
-        </div>
+        ) : (
+          <DataTable
+            columns={[
+              { key: 'target', label: 'Target', render: (s: any) => <span className="font-medium text-text">{s.target}</span> },
+              {
+                key: 'status',
+                label: 'Status',
+                render: (s: any) => <StatusBadge status={s.status} />,
+              },
+              {
+                key: 'score',
+                label: 'Score',
+                render: (s: any) => (
+                  <span className="mono-cell text-muted">{s.security_score !== null ? `${s.security_score}/100` : '—'}</span>
+                ),
+              },
+              {
+                key: 'coverage',
+                label: 'Coverage',
+                render: (s: any) => (
+                  <span className="mono-cell text-muted">{s.coverage !== null ? `${s.coverage}%` : '—'}</span>
+                ),
+              },
+              {
+                key: 'created',
+                label: 'Triggered',
+                render: (s: any) => <span className="text-[11px] text-faint">{relativeTime(s.created_at)}</span>,
+              },
+            ]}
+            rows={latestScans(scans)}
+            keyField={(s: any) => String(s.id)}
+            loading={loading}
+            onRowClick={() => navigate('/scans')}
+          />
+        )}
       </div>
     </div>
   );
 };
+
+const StatTile: React.FC<{
+  label: string;
+  icon: React.ReactNode;
+  loading?: boolean;
+  iconTone?: string;
+  children: React.ReactNode;
+}> = ({ label, icon, loading, iconTone = 'text-accent', children }) => (
+  <div className="panel rounded-md p-4 flex items-center gap-3">
+    <span className={`w-9 h-9 rounded-md border border-line bg-surface-2 flex items-center justify-center ${iconTone}`}>
+      {icon}
+    </span>
+    <div className="min-w-0">
+      <p className="eyebrow mb-0.5">{label}</p>
+      <div className="flex items-baseline gap-1">
+        {loading ? (
+          <Skeleton className="h-6 w-12" />
+        ) : (
+          <span className="text-xl font-semibold text-text leading-none">{children}</span>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+function avgScore(history: any[] | undefined): string {
+  if (!history || history.length === 0) return '—';
+  const total = history.reduce((acc, h) => acc + (Number(h.score) || 0), 0);
+  return String(Math.round(total / history.length));
+}
+
+const ScoreBars: React.FC<{ history: any[] }> = ({ history }) => (
+  <div className="flex items-end gap-1.5 h-32">
+    {history.map((h, i) => {
+      const score = h.score ?? 0;
+      const height = Math.max(4, score); // pct of container
+      return (
+        <div key={i} className="flex flex-col items-center gap-1 flex-1 min-w-0">
+          <span className="mono-cell text-[9px] text-faint">{score}</span>
+          <div className="w-full rounded-sm bg-surface-2" style={{ height: '6rem' }}>
+            <div
+              className="w-full rounded-sm bg-accent/70"
+              style={{ height: `${height}%`, transition: 'height 0.6s ease' }}
+            />
+          </div>
+          <span className="mono-cell text-[8px] text-faint truncate w-full text-center">{h.target?.split('.').slice(0, 1)[0] ?? ''}</span>
+        </div>
+      );
+    })}
+  </div>
+);
+
+const SeverityBreakdown: React.FC<{ dist: Record<string, number> }> = ({ dist }) => {
+  const order = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+  const total = Object.values(dist).reduce((a, b) => a + b, 0);
+  const max = Math.max(1, ...Object.values(dist));
+  if (total === 0) {
+    return (
+      <EmptyState
+        title="No open findings"
+        description="Findings appear here once evidence-backed records are persisted for a scan."
+      />
+    );
+  }
+  return (
+    <div className="space-y-2.5">
+      {order.map((sev) => {
+        const count = dist[sev] ?? 0;
+        if (count === 0) return null;
+        return (
+          <div key={sev} className="flex items-center gap-2">
+            <span className="w-14 shrink-0"><SeverityText severity={sev} /></span>
+            <div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${sevColorClass(sev)}`}
+                style={{ width: `${(count / max) * 100}%` }}
+              />
+            </div>
+            <span className="mono-cell text-faint w-6 text-right">{count}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+function sevColorClass(sev: string): string {
+  switch (sev) {
+    case 'Critical': return 'bg-critical';
+    case 'High': return 'bg-high';
+    case 'Medium': return 'bg-medium';
+    case 'Low': return 'bg-low';
+    default: return 'bg-faint';
+  }
+}

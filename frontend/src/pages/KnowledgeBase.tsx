@@ -1,65 +1,98 @@
 import React from 'react';
-import { Book, ShieldCheck, Cpu, Code, BookOpen } from 'lucide-react';
+import { Shield, BookMarked, Wrench } from 'lucide-react';
+import { PageHeader } from '../components/PageHeader';
+
+const articles = [
+  {
+    id: 1,
+    title: 'Understanding SQL Injection (SQLi)',
+    category: 'OWASP A03:2021',
+    plan: 'SQL Injection occurs when untrusted user input is directly concatenated into SQL database queries, allowing attackers to manipulate queries and bypass security logic.',
+    remediation:
+      'Always use parameterized queries (prepared statements) or object relational mappers (ORMs). Never format or concatenate raw strings directly into query methods.',
+    tags: ['input validation', 'OWASP'],
+    ref: 'sql-injection',
+  },
+  {
+    id: 2,
+    title: 'Content Security Policy (CSP) Headers',
+    category: 'OWASP A05:2021',
+    plan: 'A missing or weak Content Security Policy leaves web applications vulnerable to Cross-Site Scripting (XSS) and code injection by failing to declare valid script sources.',
+    remediation:
+      "Return a custom HTTP header: Content-Security-Policy: default-src 'self' script-src 'self' https://trusted-cdn.com.",
+    tags: ['headers', 'XSS'],
+    ref: 'csp-headers',
+  },
+  {
+    id: 3,
+    title: 'MITRE ATT&CK: Exploit Public-Facing Application (T1190)',
+    category: 'MITRE ATT&CK',
+    plan: 'Attackers probe weaknesses in publicly reachable services for initial access. Standard scanners like Nuclei match published signatures to detect exposure.',
+    remediation:
+      'Apply patches immediately. Keep web servers and internal library configurations updated, and minimize target exposure.',
+    tags: ['T1190', 'initial access'],
+    ref: 'mitre-t1190',
+  },
+  {
+    id: 4,
+    title: 'Managing Outdated & Vulnerable Components',
+    category: 'OWASP A06:2021',
+    plan: 'Systems with outdated dependencies (old jQuery, Express, Django versions, …) often harbor known public CVEs that can be matched by signature scanners.',
+    remediation:
+      'Integrate Software Composition Analysis (SCA) in CI/CD pipelines and configure automated dependency upgrade bots.',
+    tags: ['SCA', 'supply chain'],
+    ref: 'outdated-components',
+  },
+];
 
 export const KnowledgeBase: React.FC = () => {
-  const articles = [
-    {
-      title: "Understanding SQL Injection (SQLi)",
-      category: "OWASP A03:2021",
-      desc: "SQL Injection occurs when untrusted user input is directly concatenated into SQL database queries, allowing attackers to manipulate queries and bypass security logic.",
-      remediation: "Always use Parameterized Queries (Prepared Statements) or Object Relational Mappers (ORMs). Never format or concatenate raw strings directly into query methods."
-    },
-    {
-      title: "Content Security Policy (CSP) Headers Setup",
-      category: "OWASP A05:2021",
-      desc: "A missing or weak Content Security Policy leaves web applications vulnerable to Cross-Site Scripting (XSS) and code injection by failing to declare valid source scripts domain list.",
-      remediation: "Return custom HTTP header: Content-Security-Policy: default-src 'self' script-src 'self' https://trusted-cdn.com."
-    },
-    {
-      title: "MITRE ATT&CK: Exploit Public-Facing Application (T1190)",
-      category: "MITRE ATT&CK",
-      desc: "Attackers look for weaknesses in websites, ports, and public tools to get initial access to networks. Standard scanners like Nuclei check for matching signatures.",
-      remediation: "Apply patches immediately. Keep web servers and internal library configurations updated, and minimize target exposure."
-    },
-    {
-      title: "Managing Outdated & Vulnerable Components",
-      category: "OWASP A06:2021",
-      desc: "Software systems containing outdated dependencies (like old jQuery, Express or Django versions) often harbor known public CVE vulnerabilities.",
-      remediation: "Integrate Software Composition Analysis (SCA) scanners in your CI/CD pipelines and configure automated dependency upgrade bots."
-    }
-  ];
-
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">Security Knowledge Base</h2>
-        <p className="text-slate-400 text-sm">Remediation guides, vulnerability concepts, OWASP Top 10 guidelines and MITRE tactics.</p>
-      </div>
+      <PageHeader
+        eyebrow="Workspace / Reference"
+        title="Security knowledge base"
+        description="Reference guides for the vulnerability classes this platform reports. Static editorial content — not scan results."
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {articles.map((article, idx) => (
-          <div key={idx} className="glass-card p-6 space-y-4">
-            <div className="flex justify-between items-start">
-              <span className="text-[10px] bg-slate-800 text-emerald-400 border border-slate-700 font-bold px-2 py-0.5 rounded">
-                {article.category}
+        {articles.map((a) => (
+          <article key={a.id} className="panel rounded-md p-5 flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <span className="mono-cell text-[10px] text-accent border border-accent/40 bg-accent/10 rounded-full px-2 py-0.5">
+                {a.category}
               </span>
-              <Book className="w-4 h-4 text-slate-500" />
+              <BookMarked className="w-4 h-4 text-faint" strokeWidth={1.75} aria-hidden="true" />
             </div>
 
-            <div className="space-y-1">
-              <h3 className="font-bold text-sm text-white">{article.title}</h3>
-              <p className="text-slate-400 text-xs leading-relaxed">{article.desc}</p>
-            </div>
+            <h2 className="text-[13.5px] font-semibold text-text leading-snug">{a.title}</h2>
+            <p className="text-[11.5px] text-muted leading-relaxed mt-2 flex-1">{a.plan}</p>
 
-            <div className="bg-slate-950/60 border border-slate-900/60 p-4 rounded-lg space-y-1.5">
-              <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
-                <Code className="w-3.5 h-3.5" />
-                <span>Standard Mitigation Plan</span>
+            <div className="mt-4 border border-line rounded bg-bg p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-accent">
+                <Wrench className="w-3 h-3" aria-hidden="true" />
+                <span>Standard mitigation plan</span>
               </div>
-              <p className="text-slate-400 text-xs leading-relaxed">{article.remediation}</p>
+              <p className="text-[11.5px] text-muted leading-relaxed">{a.remediation}</p>
             </div>
-          </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 mt-3">
+              <span className="mono-cell text-[9px] text-faint">#{a.ref}</span>
+              {a.tags.map((t) => (
+                <span key={t} className="mono-cell text-[9px] text-faint border border-line rounded px-1.5 py-0.5">
+                  {t}
+                </span>
+              ))}
+            </div>
+          </article>
         ))}
+      </div>
+
+      <div className="panel rounded-md p-3 flex items-center gap-2 text-[11.5px] text-muted">
+        <Shield className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
+        <span>
+          Articles align with OWASP Top 10 (2021) and the MITRE ATT&amp;CK framework. Findings link to these concepts by
+          rule identifier.
+        </span>
       </div>
     </div>
   );

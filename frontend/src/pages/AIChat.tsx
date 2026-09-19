@@ -1,11 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, Send, Bot, User, Terminal, HelpCircle } from 'lucide-react';
+import { Send, UserRound, MessageSquareText, Sparkles, Bot } from 'lucide-react';
 import { apiFetch } from '../api';
+import { PageHeader } from '../components/PageHeader';
+import { LoaderBlock } from '../components/ErrorState';
+
+interface Message {
+  role: string;
+  message: string;
+  created_at?: string;
+}
 
 export const AIChat: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [selectedScanId, setSelectedScanId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [listLoading, setListLoading] = useState(true);
@@ -50,27 +58,38 @@ export const AIChat: React.FC = () => {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !selectedScanId) return;
-
     const userMsg = input.trim();
     setInput('');
-    // Optimistic user insert
-    setMessages((prev) => [...prev, { role: 'user', message: userMsg, created_at: new Date() }]);
+    await sendMessage(userMsg);
+  };
+
+  const sendMessage = async (rawMsg: string) => {
+    if (!selectedScanId) return;
+    setMessages((prev) => [...prev, { role: 'user', message: rawMsg, created_at: new Date().toISOString() }]);
     setLoading(true);
 
     try {
       const res = await apiFetch('/chat/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scan_id: selectedScanId, message: userMsg })
+        body: JSON.stringify({ scan_id: selectedScanId, message: rawMsg }),
       });
 
       if (res.ok) {
         const data = await res.json();
         setMessages((prev) => [...prev, { role: 'assistant', message: data.message, created_at: data.created_at }]);
+      } else {
+        const errData = await res.json().catch(() => null);
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', message: errData?.detail || 'The request failed. Check the server and retry.', created_at: new Date().toISOString() },
+        ]);
       }
-    } catch (err) {
-      console.error('Error in chat request:', err);
-      setMessages((prev) => [...prev, { role: 'assistant', message: 'Could not reach the assessment backend. Ensure the server is active.', created_at: new Date() }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', message: 'Could not reach the assessment backend. Ensure the server is active.', created_at: new Date().toISOString() },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -78,80 +97,108 @@ export const AIChat: React.FC = () => {
 
   // Autoscroll chat window
   useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [messages, loading]);
 
   useEffect(() => {
     fetchScans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sampleQuestions = [
-    "What is SQL Injection?",
-    "How do I fix missing CSP?",
-    "Which issue should I fix first?",
-    "Summarize today's findings"
+    'What is SQL Injection?',
+    'How do I fix a missing CSP?',
+    'Which issue should I fix first?',
+    'Summarize the findings for this scan',
   ];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">Assessment Assistant</h2>
-        <p className="text-slate-400 text-sm">Deterministic, evidence-driven Q&amp;A over persisted scan findings. No fabricated answers.</p>
-      </div>
+      <PageHeader
+        eyebrow="Intelligence / Assistant"
+        title="Assessment Assistant"
+        description="Deterministic, evidence-driven Q&A over persisted scan findings. No fabricated answers."
+      />
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Left: Scan session selector */}
-        <div className="glass-card p-4 space-y-3 h-[550px] overflow-y-auto">
-          <h3 className="text-sm font-semibold text-slate-300">Scan Session Context</h3>
-          
-          {listLoading ? (
-            <div className="text-slate-500 text-xs text-center py-10">Listing sessions...</div>
-          ) : scans.length === 0 ? (
-            <div className="text-slate-500 text-xs text-center py-10">No sessions available. Run a scan.</div>
-          ) : (
-            <div className="space-y-2">
-              {scans.map((scan) => (
-                <div
-                  key={scan.id}
-                  onClick={() => handleSelectScan(scan.id)}
-                  className={`p-3 rounded-lg border transition-all duration-200 cursor-pointer ${
-                    selectedScanId === scan.id
-                      ? 'bg-slate-900 border-emerald-500/40'
-                      : 'bg-slate-955 border-slate-900 hover:bg-slate-900/40 hover:border-slate-800'
-                  }`}
-                >
-                  <span className="font-semibold text-xs text-white block truncate">{scan.target}</span>
-                  <div className="flex justify-between items-center text-[10px] text-slate-500 mt-1">
-                    <span>Scan #{scan.id}</span>
-                    <span>Score: {scan.security_score ?? 'Pending'}</span>
-                  </div>
-                </div>
-              ))}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Session selector */}
+        <div className="lg:col-span-1">
+          <div className="panel rounded-md overflow-hidden">
+            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Scan sessions</h2>
+              <span className="mono-cell text-[10px] text-faint">{scans.length}</span>
             </div>
-          )}
+            <div className="max-h-[70vh] overflow-y-auto p-2">
+              {listLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="skeleton h-12 rounded" />
+                  ))}
+                </div>
+              ) : scans.length === 0 ? (
+                <p className="text-[11px] text-faint px-2 py-4">No sessions available. Run a scan.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {scans.map((scan) => {
+                    const active = selectedScanId === scan.id;
+                    return (
+                      <li key={scan.id}>
+                        <button
+                          onClick={() => handleSelectScan(scan.id)}
+                          className={`w-full text-left rounded px-3 py-2.5 border-l-2 transition-colors cursor-pointer ${
+                            active ? 'bg-surface-2 border-accent' : 'border-transparent hover:bg-surface-2/60'
+                          }`}
+                        >
+                          <span className="block text-[12px] font-medium text-text truncate">{scan.target}</span>
+                          <div className="flex items-center justify-between text-[10px] text-faint mt-0.5">
+                            <span>scan #{scan.id}</span>
+                            <span>score: {scan.security_score ?? '—'}</span>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Right: Message Window */}
-        <div className="glass-card p-5 lg:col-span-3 h-[550px] flex flex-col justify-between">
-          {/* Messages lists scroll */}
-          <div ref={chatScrollRef} className="flex-1 overflow-y-auto space-y-4 pr-2 mb-4 scroll-smooth">
-            {messages.length === 0 ? (
+        {/* Chat window */}
+        <div className="lg:col-span-3 panel rounded-md flex flex-col min-h-0" style={{ height: 640 }}>
+          <div className="flex items-center gap-2 px-4 pt-3 pb-2 border-b border-line">
+            <MessageSquareText className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Conversation</h2>
+            {selectedScanId && (
+              <span className="mono-cell text-[10px] text-faint ml-2">scan #{selectedScanId}</span>
+            )}
+          </div>
+
+          <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+            {messages.length === 0 && !loading ? (
               <div className="h-full flex flex-col justify-center items-center text-center space-y-4 max-w-md mx-auto">
-                <Bot className="w-12 h-12 text-emerald-500 bg-slate-900 border border-slate-850 p-2 rounded-xl" />
-                <div>
-                  <h4 className="text-sm font-bold text-white">Ask about persisted vulnerabilities</h4>
-                  <p className="text-slate-500 text-xs mt-1">The Assessment Assistant replies only from evidence-backed findings recorded for the selected scan.</p>
+                <div className="w-12 h-12 rounded-md border border-line bg-surface-2 flex items-center justify-center text-accent">
+                  <Sparkles className="w-5 h-5" strokeWidth={1.75} aria-hidden="true" />
                 </div>
-                
-                {/* Seed prompt options */}
-                <div className="grid grid-cols-2 gap-2 w-full pt-2">
+                <div>
+                  <h4 className="text-[13px] font-semibold text-text">Ask about persisted vulnerabilities</h4>
+                  <p className="text-[11.5px] text-muted mt-1">
+                    Replies are generated only from evidence-backed findings recorded for the selected scan.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full pt-1">
                   {sampleQuestions.map((q) => (
                     <button
                       key={q}
-                      onClick={() => setInput(q)}
-                      className="text-left text-[10px] text-slate-400 bg-slate-900 hover:bg-slate-850 border border-slate-800/80 p-2.5 rounded-lg transition-colors cursor-pointer"
+                      type="button"
+                      onClick={() => {
+                        if (selectedScanId) {
+                          sendMessage(q);
+                        } else {
+                          setInput(q);
+                        }
+                      }}
+                      className="text-left text-[11px] text-muted bg-surface-2 hover:bg-line border border-line p-2.5 rounded transition-colors cursor-pointer"
                     >
                       {q}
                     </button>
@@ -161,49 +208,59 @@ export const AIChat: React.FC = () => {
             ) : (
               messages.map((m, idx) => (
                 <div key={idx} className={`flex gap-3 max-w-[85%] ${m.role === 'user' ? 'ml-auto flex-row-reverse' : ''}`}>
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 border ${
-                    m.role === 'user' ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-emerald-950/20 border-emerald-900/30 text-emerald-500'
-                  }`}>
-                    {m.role === 'user' ? <User className="w-4.5 h-4.5" /> : <Bot className="w-4.5 h-4.5" />}
+                  <div
+                    className={`w-7 h-7 rounded shrink-0 border flex items-center justify-center ${
+                      m.role === 'user' ? 'bg-surface-2 border-line text-accent' : 'bg-surface-2 border-line text-muted'
+                    }`}
+                  >
+                    {m.role === 'user' ? (
+                      <UserRound className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <Bot className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
                   </div>
-                  
-                  <div className={`p-4 rounded-xl text-xs leading-relaxed space-y-2 ${
-                    m.role === 'user' ? 'bg-slate-900 text-white' : 'bg-slate-950/40 border border-slate-900 text-slate-200'
-                  }`}>
-                    <div className="whitespace-pre-line">{m.message}</div>
+                  <div
+                    className={`rounded px-3.5 py-2.5 text-[12px] leading-relaxed whitespace-pre-wrap ${
+                      m.role === 'user' ? 'bg-surface-2 text-text border border-line' : 'bg-bg text-muted border border-line'
+                    }`}
+                  >
+                    {m.message}
                   </div>
                 </div>
               ))
             )}
-            
+
             {loading && (
               <div className="flex gap-3">
-                <div className="w-8 h-8 rounded-lg bg-emerald-950/20 border border-emerald-900/30 text-emerald-500 flex items-center justify-center flex-shrink-0 animate-pulse">
-                  <Bot className="w-4.5 h-4.5" />
+                <div className="w-7 h-7 rounded shrink-0 border border-line bg-surface-2 text-muted flex items-center justify-center">
+                  <Bot className="w-3.5 h-3.5" aria-hidden="true" />
                 </div>
-                <div className="bg-slate-950/40 border border-slate-900 p-4 rounded-xl text-xs text-slate-500 animate-pulse">
-                  Compiling vulnerability context from persisted findings...
+                <div className="bg-bg border border-line rounded px-3.5 py-2.5 text-[12px] text-faint">
+                  Compiling context from persisted findings…
                 </div>
               </div>
             )}
           </div>
 
-          {/* Form input messaging controller */}
-          <form onSubmit={handleSend} className="flex gap-2 flex-shrink-0 border-t border-slate-900 pt-3">
+          <form onSubmit={handleSend} className="flex gap-2 px-4 pt-3 pb-4 border-t border-line">
             <input
               type="text"
-              placeholder={selectedScanId ? "Ask the assistant: 'Explain this vulnerability'..." : "Select scan session on the left to start chat"}
+              placeholder={
+                selectedScanId ? "Ask the assistant — 'Explain this vulnerability'…" : 'Select a scan session to start'
+              }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!selectedScanId || loading}
-              className="flex-1 bg-slate-950 border border-slate-900 rounded-lg px-3.5 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500/80 transition-colors"
+              className="flex-1 bg-bg border border-line rounded px-3 py-2 text-[12.5px] text-text placeholder:text-faint/70 focus:outline-none focus:border-accent/60 transition-colors disabled:opacity-50"
+              aria-label="Ask a question"
             />
             <button
               type="submit"
               disabled={!selectedScanId || loading || !input.trim()}
-              className="bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-slate-955 font-semibold text-xs px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="inline-flex items-center justify-center gap-1 p-2 rounded bg-accent text-[#062b20] hover:bg-accent/85 disabled:opacity-45 transition-colors cursor-pointer"
+              aria-label="Send"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4" aria-hidden="true" />
             </button>
           </form>
         </div>
@@ -211,3 +268,4 @@ export const AIChat: React.FC = () => {
     </div>
   );
 };
+

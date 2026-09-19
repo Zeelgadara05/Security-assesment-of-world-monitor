@@ -1,8 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShieldAlert, AlertTriangle, Info, ShieldCheck, ChevronDown, ChevronUp, Terminal, XCircle, RefreshCw, Cpu, Layers } from 'lucide-react';
+import {
+  Layers,
+  Terminal,
+  Scale,
+  FileSearch,
+  ShieldCheck,
+  ChevronRight,
+  RotateCw,
+} from 'lucide-react';
 import { apiFetch, authUrl } from '../api';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge } from '../components/StatusBadge';
+import { SeverityBadge } from '../components/SeverityBadge';
+import { EmptyState } from '../components/EmptyState';
+import { ErrorState } from '../components/ErrorState';
+import { SkeletonPanel } from '../components/Skeleton';
+import { formatDate, formatDateTime } from '../components/format';
 
-const STAGE_LABELS = [
+const STAGES = [
   { id: 'queued', label: 'Queued' },
   { id: 'starting', label: 'Starting' },
   { id: 'recon', label: 'Recon' },
@@ -22,6 +37,7 @@ export const Scans: React.FC = () => {
   const [logs, setLogs] = useState('');
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
   const [expandedVuln, setExpandedVuln] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [liveEvents, setLiveEvents] = useState<string[]>([]);
@@ -29,14 +45,12 @@ export const Scans: React.FC = () => {
   const liveRef = useRef<HTMLDivElement>(null);
 
   const fetchScans = async () => {
+    setLoading(true);
     try {
       const res = await apiFetch('/scans/list');
       if (res.ok) {
         const data = await res.json();
         setScans(data);
-        if (data.length > 0 && !selectedScan) {
-          handleSelectScan(data[0].id);
-        }
       }
     } catch (err) {
       console.error('Error fetching scans list:', err);
@@ -52,6 +66,7 @@ export const Scans: React.FC = () => {
     }
     setLiveEvents([]);
     setDetailsLoading(true);
+    setDetailError('');
     try {
       const res = await apiFetch(`/scans/${id}`);
       if (res.ok) {
@@ -61,9 +76,12 @@ export const Scans: React.FC = () => {
         setTools(data.tools || []);
         setLogs(data.logs || '');
         startSSEStream(id);
+      } else {
+        const errData = await res.json().catch(() => null);
+        setDetailError(errData?.detail || 'Failed to load scan details.');
       }
-    } catch (err) {
-      console.error('Error fetching scan details:', err);
+    } catch {
+      setDetailError('Server connection failed.');
     } finally {
       setDetailsLoading(false);
     }
@@ -94,10 +112,22 @@ export const Scans: React.FC = () => {
           setLiveEvents((prev) => [...prev, `[Finding] ${data.severity}: ${data.title}`]);
         }
         if (data.type === 'progress') {
-          setSelectedScan((prev: any) => (prev ? { ...prev, coverage: data.coverage, security_score: data.security_score } : prev));
+          setSelectedScan((prev: any) =>
+            prev ? { ...prev, coverage: data.coverage, security_score: data.security_score } : prev
+          );
         }
         if (data.type === 'done') {
-          setSelectedScan((prev: any) => (prev ? { ...prev, status: data.status, stage: data.stage, coverage: data.coverage, security_score: data.security_score } : prev));
+          setSelectedScan((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  status: data.status,
+                  stage: data.stage,
+                  coverage: data.coverage,
+                  security_score: data.security_score,
+                }
+              : prev
+          );
           setLiveEvents((prev) => [...prev, `[Done] ${data.status} — coverage ${data.coverage ?? 0}%`]);
           es.close();
           eventSourceRef.current = null;
@@ -117,16 +147,12 @@ export const Scans: React.FC = () => {
   useEffect(() => {
     fetchScans();
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      if (eventSourceRef.current) eventSourceRef.current.close();
     };
   }, []);
 
   useEffect(() => {
-    if (liveRef.current) {
-      liveRef.current.scrollTop = liveRef.current.scrollHeight;
-    }
+    if (liveRef.current) liveRef.current.scrollTop = liveRef.current.scrollHeight;
   }, [liveEvents]);
 
   const handleCancel = async () => {
@@ -137,7 +163,7 @@ export const Scans: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setLiveEvents((prev) => [...prev, `[System] Cancellation requested. ${data.message || ''}`]);
-        setSelectedScan((prev: any) => (prev ? { ...prev, status: 'Cancelling...' } : prev));
+        setSelectedScan((prev: any) => (prev ? { ...prev, status: 'Cancelling…' } : prev));
       } else {
         const errData = await res.json().catch(() => null);
         setLiveEvents((prev) => [...prev, `[Error] Cancel failed: ${errData?.detail || 'unknown'}`]);
@@ -149,314 +175,338 @@ export const Scans: React.FC = () => {
     }
   };
 
-  const getSeverityBadge = (sev: string) => {
-    switch (sev.toLowerCase()) {
-      case 'critical':
-        return 'bg-red-500/10 border-red-500/20 text-red-500';
-      case 'high':
-        return 'bg-orange-500/10 border-orange-500/20 text-orange-500';
-      case 'medium':
-        return 'bg-yellow-500/10 border-yellow-500/20 text-yellow-500';
-      case 'low':
-        return 'bg-blue-500/10 border-blue-500/20 text-blue-500';
-      default:
-        return 'bg-slate-500/10 border-slate-500/20 text-slate-400';
-    }
-  };
-
-  const stageIndex = (s: string | undefined) => STAGE_LABELS.findIndex((st) => st.id === (s || '').toLowerCase());
-  const currentStageIdx = selectedScan ? stageIndex(selectedScan.stage) : -1;
-  const terminalStage = selectedScan ? ['completed', 'partial', 'failed', 'cancelled'].includes((selectedScan.stage || '').toLowerCase()) : false;
-  const lastInclusive = terminalStage ? STAGE_LABELS.length : currentStageIdx + 1;
-
+  const stageIdx = (s?: string) => STAGES.findIndex((st) => st.id === (s || '').toLowerCase());
+  const currentStageIdx = selectedScan ? stageIdx(selectedScan.stage) : -1;
+  const terminalStage = selectedScan
+    ? ['completed', 'partial', 'failed', 'cancelled'].includes((selectedScan.stage || '').toLowerCase())
+    : false;
+  const lastInclusive = terminalStage ? STAGES.length : currentStageIdx + 1;
   const isActive = (idx: number) => !terminalStage && idx === currentStageIdx;
   const isDone = (idx: number) => idx < lastInclusive;
-  const totalTools = tools.length;
   const notInstalledTools = tools.filter((t) => (t.status || '').toLowerCase() === 'not installed').length;
+  const canCancel =
+    selectedScan &&
+    (selectedScan.status === 'Running' || selectedScan.status === 'Pending' || selectedScan.status === 'Cancelling…') &&
+    !['completed', 'partial', 'failed', 'cancelled'].includes((selectedScan.stage || '').toLowerCase());
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white">Scans History</h2>
-        <p className="text-slate-400 text-sm">Stage-packed lifetime of each scanning job, its evidence, and outcomes.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Side: Scan list */}
-        <div className="glass-card p-4 space-y-3 h-[600px] overflow-y-auto">
-          <h3 className="text-sm font-semibold text-slate-300 px-1">Triggered Scans</h3>
-
-          {loading ? (
-            <div className="text-slate-500 text-xs text-center py-8">Loading history...</div>
-          ) : scans.length === 0 ? (
-            <div className="text-slate-500 text-xs text-center py-8">No scan logs found.</div>
+      <PageHeader
+        eyebrow="Operations / Assessments"
+        title="Scan history"
+        description="Stage-packed lifetime of each scanning job, its evidence, and outcomes."
+        actions={
+          selectedScan && currentStageIdx >= 0 && !terminalStage ? (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="inline-flex items-center gap-1.5 text-[11px] text-critical border border-critical/40 rounded px-2.5 py-1.5 hover:bg-critical/10 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <Scale className="w-3 h-3" aria-hidden="true" />
+              {cancelling ? 'Requesting…' : 'Request cancellation'}
+            </button>
           ) : (
-            <div className="space-y-2">
-              {scans.map((scan) => (
-                <div
-                  key={scan.id}
-                  onClick={() => handleSelectScan(scan.id)}
-                  className={`p-3.5 rounded-lg border transition-all duration-200 cursor-pointer ${
-                    selectedScan?.id === scan.id
-                      ? 'bg-slate-900 border-emerald-500/40'
-                      : 'bg-slate-955 border-slate-900 hover:bg-slate-900/40 hover:border-slate-800'
-                  }`}
-                >
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="font-semibold text-xs text-white truncate max-w-[140px]">{scan.target}</span>
-                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold border ${
-                      scan.status === 'Completed' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' :
-                      scan.status === 'Running' ? 'bg-amber-500/10 border-amber-500/20 text-amber-500 animate-pulse' :
-                      scan.status === 'Cancelled' ? 'bg-slate-500/10 border-slate-500/20 text-slate-400' :
-                      'bg-red-500/10 border-red-500/20 text-red-500'
-                    }`}>{scan.status}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-[10px] text-slate-500">
-                    <span>Score: <strong className={scan.security_score >= 80 ? 'text-emerald-500' : scan.security_score >= 50 ? 'text-yellow-500' : 'text-red-500'}>{scan.security_score ?? 'Pending'}</strong></span>
-                    <span>{new Date(scan.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-              ))}
+            <button
+              onClick={fetchScans}
+              className="inline-flex items-center gap-1.5 text-[11px] border border-line rounded px-2.5 py-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors cursor-pointer"
+            >
+              <RotateCw className="w-3 h-3" aria-hidden="true" />
+              Refresh
+            </button>
+          )
+        }
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Scan list */}
+        <div className="lg:col-span-1">
+          <div className="panel rounded-md overflow-hidden">
+            <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Triggered scans</h2>
+              <span className="mono-cell text-[10px] text-faint">{scans.length}</span>
             </div>
-          )}
+            <div className="max-h-[70vh] overflow-y-auto p-2">
+              {loading ? (
+                <div className="px-2 space-y-2">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="skeleton h-14 rounded" />
+                  ))}
+                </div>
+              ) : scans.length === 0 ? (
+                <EmptyState
+                  title="No scan logs"
+                  description="Queue an assessment from the New Assessment page."
+                />
+              ) : (
+                <ul className="space-y-1">
+                  {scans.map((scan) => {
+                    const selected = selectedScan?.id === scan.id;
+                    return (
+                      <li key={scan.id}>
+                        <button
+                          onClick={() => handleSelectScan(scan.id)}
+                          className={`w-full text-left rounded px-3 py-2.5 border-l-2 transition-colors cursor-pointer ${
+                            selected
+                              ? 'bg-surface-2 border-accent'
+                              : 'border-transparent hover:bg-surface-2/60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[12px] font-medium text-text truncate">{scan.target}</span>
+                            <StatusBadge status={scan.status} />
+                          </div>
+                          <div className="flex items-center justify-between mt-1 text-[10px] text-faint">
+                            <span>#{scan.id}</span>
+                            <span>{formatDate(scan.created_at)}</span>
+                          </div>
+                          {scan.security_score !== null && (
+                            <p className="mono-cell text-[10px] text-faint mt-0.5">score: {scan.security_score}/100</p>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Right Side: Scan Details */}
-        <div className="glass-card p-6 lg:col-span-2 space-y-6 h-[600px] overflow-y-auto">
-          {detailsLoading ? (
-            <div className="text-slate-500 text-xs text-center py-24">Loading scan details...</div>
-          ) : !selectedScan ? (
-            <div className="text-slate-500 text-xs text-center py-24">Select a scan history card to inspect the pipeline output.</div>
-          ) : (
-            <div className="space-y-6">
-              {/* Target info card */}
-              <div className="flex justify-between items-start border-b border-slate-850 pb-4">
-                <div>
-                  <h3 className="font-bold text-lg text-white">{selectedScan.target}</h3>
-                  <p className="text-xs text-slate-500">Scan ID: #{selectedScan.id} • Queued at {new Date(selectedScan.created_at).toLocaleString()}</p>
-                  <div className="flex gap-2 mt-2 text-[10px]">
-                    <span className="bg-slate-900 border border-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">stage: {selectedScan.stage || 'queued'}</span>
-                    <span className="bg-slate-900 border border-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">mode: {selectedScan.simulation ? 'simulation' : 'real'}</span>
+        {/* Detail */}
+        <div className="lg:col-span-3">
+          <div className="space-y-4">
+            {detailsLoading ? (
+              <SkeletonPanel className="min-h-[360px]" />
+            ) : detailError ? (
+              <ErrorState message={detailError} onRetry={() => selectedScan && handleSelectScan(selectedScan.id)} />
+            ) : !selectedScan ? (
+              <EmptyState
+                icon={<FileSearch className="w-4 h-4" aria-hidden="true" />}
+                title="No assessment selected"
+                description="Select a scan from the list to inspect its pipeline, evidence, and findings."
+              />
+            ) : (
+              <>
+                {/* Header summary */}
+                <div className="panel rounded-md p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-base font-semibold text-text truncate">{selectedScan.target}</h2>
+                      <p className="mono-cell text-[10.5px] text-faint mt-1">
+                        #{selectedScan.id} · queued {formatDateTime(selectedScan.created_at)}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        <StatusBadge status={selectedScan.status} />
+                        <span className="mono-cell text-[10px] text-faint">stage: {selectedScan.stage || 'queued'}</span>
+                        <span className="mono-cell text-[10px] text-faint">
+                          mode: {selectedScan.simulation ? 'simulation' : 'real'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-6">
+                      <div className="text-right">
+                        <p className="eyebrow">Coverage</p>
+                        <p className="text-lg font-semibold text-text">{selectedScan.coverage ?? '—'}%</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="eyebrow">Security score</p>
+                        <p className="text-lg font-semibold text-text">{selectedScan.security_score ?? '—'}/100</p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="text-right space-y-1">
-                  <span className="text-[10px] text-slate-500 block uppercase tracking-widest font-semibold">Security Rating</span>
-                  <span className={`text-3xl font-extrabold ${
-                    selectedScan.security_score >= 80 ? 'text-emerald-500' :
-                    selectedScan.security_score >= 50 ? 'text-warning' : 'text-danger'
-                  }`}>{selectedScan.security_score ?? '--'}/100</span>
-                  <span className="block text-[10px] text-slate-500">Coverage: {selectedScan.coverage ?? '--'}%</span>
-                </div>
-              </div>
 
-              {/* Lifecycle timeline */}
-              {selectedScan.stage && (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-emerald-500" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Pipeline Lifecycle</h4>
-                  </div>
-                  <div className="flex items-center gap-1 overflow-x-auto pb-1">
-                    {STAGE_LABELS.map((stage, idx) => {
-                      const done = isDone(idx);
-                      const active = isActive(idx);
-                      return (
-                        <div key={stage.id} className="flex items-center gap-1 flex-shrink-0">
-                          <div
-                            className={`px-2.5 py-1 rounded-full border text-[9px] font-bold uppercase tracking-wide flex-shrink-0 ${
-                              done && !active && !terminalStage ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                              : done && terminalStage ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                              : active ? 'bg-amber-500/10 border-amber-500/40 text-amber-400 animate-pulse'
-                              : 'bg-slate-950 border-slate-800 text-slate-600'
-                            }`}
-                          >
-                            {stage.label}
-                          </div>
-                          {idx < STAGE_LABELS.length - 1 && (
-                            <div className={`w-2 h-px ${done ? 'bg-emerald-500/40' : 'bg-slate-800'}`} />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Tool results */}
-              <div className="space-y-2 border-t border-slate-850 pt-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Cpu className="w-4 h-4 text-emerald-500" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Tool Pipeline ({totalTools})</h4>
-                  </div>
-                  {notInstalledTools > 0 && (
-                    <span className="text-[9px] text-amber-400/80 font-mono">{notInstalledTools} not installed — honestly reported</span>
+                  {/* Lifecycle */}
+                  {selectedScan.stage && (
+                    <div className="mt-4 pt-4 border-t border-line">
+                      <div className="flex items-center gap-1.5 mb-2.5">
+                        <Layers className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pipeline lifecycle</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                        {STAGES.map((st, idx) => {
+                          const done = isDone(idx) || (terminalStage && isDone(idx));
+                          const active = isActive(idx);
+                          return (
+                            <div key={st.id} className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`px-2 py-1 rounded border mono-cell text-[9px] uppercase tracking-wide ${
+                                  active
+                                    ? 'border-accent/60 text-accent bg-accent/10'
+                                    : done
+                                    ? 'border-line-strong text-muted bg-surface-2'
+                                    : 'border-line text-faint'
+                                }`}
+                              >
+                                {st.label}
+                              </span>
+                              {idx < STAGES.length - 1 && (
+                                <span className={`w-2 h-px ${isDone(idx) ? 'bg-line-strong' : 'bg-line'}`} />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
                 </div>
-                {totalTools === 0 ? (
-                  <div className="bg-slate-950 border border-slate-900 rounded-lg p-4 text-[10px] text-slate-500 text-center">
-                    No tools have completed yet. Queued jobs launch asynchronously.
+
+                {/* Tool pipeline */}
+                <div className="panel rounded-md p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Tool pipeline ({tools.length})</h3>
+                    {notInstalledTools > 0 && (
+                      <span className="mono-cell text-[10px] text-medium">{notInstalledTools} not installed</span>
+                    )}
                   </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {tools.map((tr, i) => {
-                      const st = (tr.status || '').toLowerCase();
-                      return (
-                        <span
+                  {tools.length === 0 ? (
+                    <p className="text-[11px] text-faint">No tool completions yet. Queued jobs launch asynchronously.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {tools.map((tr, i) => (
+                        <div
                           key={`${tr.name}-${i}`}
-                          className={`text-[9px] font-mono px-2 py-1 rounded border ${
-                            st === 'completed' || st === 'success'
-                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                              : st === 'not installed'
-                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                                : st === 'failed'
-                                  ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                                  : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                          title={tr.raw_output ? `raw output available in /observations` : undefined}
+                          className="flex items-center justify-between gap-2 border border-line rounded px-2.5 py-2"
+                          title={tr.raw_output ? 'raw output available in observations' : undefined}
                         >
-                          {tr.name} <span className="opacity-80">· {tr.status}</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Scan Findings */}
-              <div className="space-y-4">
-                <h4 className="text-sm font-semibold text-slate-300">Vulnerabilities Identified ({vulnerabilities.length})</h4>
-
-                {vulnerabilities.length === 0 ? (
-                  <div className="bg-slate-950 border border-slate-900 rounded-lg p-6 text-center">
-                    <ShieldCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-                    <p className="text-xs text-slate-400">No evidence-backed findings were persisted for this scan.</p>
-                    <p className="text-[10px] text-slate-600 mt-1">Findings are only ever created from real tool observations.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {vulnerabilities.map((vuln) => {
-                      const isExpanded = expandedVuln === vuln.id;
-                      return (
-                        <div key={vuln.id} className="border border-slate-850/80 rounded-lg overflow-hidden bg-slate-950/20">
-                          <div
-                            onClick={() => setExpandedVuln(isExpanded ? null : vuln.id)}
-                            className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-900/30 transition-colors"
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded border ${getSeverityBadge(vuln.severity)}`}>
-                                {vuln.severity}
-                              </span>
-                              <span className="text-xs font-semibold text-slate-200">{vuln.title}</span>
-                              <span className="text-[9px] text-slate-500 font-mono">[{vuln.state || 'NEW'}]</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {vuln.cve && <span className="text-[10px] font-mono bg-slate-850 px-2 py-0.5 rounded text-slate-400">{vuln.cve}</span>}
-                              {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-                            </div>
-                          </div>
-
-                          {isExpanded && (
-                            <div className="p-4 border-t border-slate-850 bg-slate-950/50 space-y-4 text-xs">
-                              <div className="grid grid-cols-2 gap-4 text-slate-400 border-b border-slate-900 pb-3">
-                                <div>
-                                  <span className="text-[10px] text-slate-500 block">OWASP Alignment</span>
-                                  <span className="font-semibold text-slate-300">{vuln.owasp || 'N/A'}</span>
-                                </div>
-                                <div>
-                                  <span className="text-[10px] text-slate-500 block">MITRE ATT&CK Mapping</span>
-                                  <span className="font-semibold text-slate-300">{vuln.mitre || 'N/A'}</span>
-                                </div>
-                                <div>
-                                  <span className="text-[10px] text-slate-500 block">CVSS Rating</span>
-                                  <span className="font-semibold text-slate-300">{vuln.cvss || 'N/A'}</span>
-                                </div>
-                                <div>
-                                  <span className="text-[10px] text-slate-500 block">Rule / CWE</span>
-                                  <span className="font-mono text-slate-300">{vuln.rule_id || 'legacy'}{vuln.cwe ? ` · ${vuln.cwe}` : ''}</span>
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <span className="text-[10px] text-slate-500 block">Description</span>
-                                <p className="text-slate-300 leading-relaxed">{vuln.description}</p>
-                              </div>
-
-                              <div className="space-y-1">
-                                <span className="text-[10px] text-slate-500 block">Recommended Mitigation</span>
-                                <p className="text-emerald-400 leading-relaxed bg-emerald-950/10 border border-emerald-900/20 p-3 rounded-lg">{vuln.remediation}</p>
-                              </div>
-
-                              {(vuln.evidence_observation_ids?.length > 0) && (
-                                <div className="space-y-1">
-                                  <span className="text-[10px] text-slate-500 block">Evidence Provenance</span>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {vuln.evidence_observation_ids.map((oid: number) => (
-                                      <span key={oid} className="text-[9px] font-mono bg-slate-900 border border-slate-800 text-emerald-400 px-2 py-0.5 rounded">
-                                        observation #{oid}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {vuln.proof_of_concept && (
-                                <div className="space-y-1">
-                                  <span className="text-[10px] text-slate-500 block">Proof of Concept Evidence</span>
-                                  <pre className="bg-slate-950 border border-slate-900 rounded p-3 text-[10px] font-mono text-cyan-400 overflow-x-auto whitespace-pre-wrap">{vuln.proof_of_concept}</pre>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                          <span className="mono-cell text-[11px] text-text truncate">{tr.name}</span>
+                          <StatusBadge status={tr.status} />
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Findings */}
+                <div className="panel rounded-md p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                      Findings ({vulnerabilities.length})
+                    </h3>
+                    <span className="eyebrow">evidence-backed</span>
                   </div>
-                )}
-              </div>
 
-              {/* Cancel + live events */}
-              <div className="flex items-center gap-2 border-t border-slate-850 pt-4">
-                {(selectedScan.status === 'Running' || selectedScan.status === 'Pending' || selectedScan.status === 'Cancelling...') && !['completed', 'partial', 'failed', 'cancelled'].includes((selectedScan.stage || '').toLowerCase()) ? (
-                  <button
-                    onClick={handleCancel}
-                    disabled={cancelling}
-                    className="bg-red-950/30 border border-red-800/40 text-red-400 hover:bg-red-950/50 disabled:opacity-50 text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                    <span>{cancelling ? 'Requesting...' : 'Request Cancellation'}</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={fetchScans}
-                    className="bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Refresh</span>
-                  </button>
-                )}
-                <div
-                  ref={liveRef}
-                  className="flex-1 h-24 bg-slate-950/60 border border-slate-900 rounded-lg p-2.5 font-mono text-[9px] text-emerald-400/80 overflow-y-auto whitespace-pre-wrap"
-                >
-                  {liveEvents.length === 0
-                    ? <span className="text-slate-600">// Waiting for live pipeline events...</span>
-                    : liveEvents.join('\n')}
-                </div>
-              </div>
+                  {vulnerabilities.length === 0 ? (
+                    <div className="flex flex-col items-center text-center py-6">
+                      <ShieldCheck className="w-8 h-8 text-faint" strokeWidth={1.5} aria-hidden="true" />
+                      <p className="text-[12px] text-muted mt-2">No evidence-backed findings persisted for this scan.</p>
+                      <p className="text-[10.5px] text-faint mt-1">Findings are only ever created from real tool observations.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {vulnerabilities.map((vuln) => {
+                        const isExpanded = expandedVuln === vuln.id;
+                        return (
+                          <div key={vuln.id} className="border border-line rounded overflow-hidden">
+                            <button
+                              onClick={() => setExpandedVuln(isExpanded ? null : vuln.id)}
+                              className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-surface-2/60 transition-colors cursor-pointer"
+                              aria-expanded={isExpanded}
+                            >
+                              <SeverityBadge severity={vuln.severity} />
+                              <span className="flex-1 min-w-0 text-[12px] font-medium text-text truncate">{vuln.title}</span>
+                              {vuln.cve && <span className="mono-cell text-[10px] text-faint shrink-0">{vuln.cve}</span>}
+                              <ChevronRight
+                                className={`w-3.5 h-3.5 text-faint shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                aria-hidden="true"
+                              />
+                            </button>
 
-              {/* Terminal Logs */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Terminal className="w-4 h-4 text-emerald-500" />
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Scan Logs</h4>
+                            {isExpanded && <FindingDetail vuln={vuln} />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                <pre className="bg-slate-950 border border-slate-900 rounded-lg p-4 font-mono text-[10px] text-emerald-400 leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">{logs || '// No logs yet.'}</pre>
-              </div>
-            </div>
-          )}
+
+                {/* Live events + logs */}
+                {(liveEvents.length > 0 || logs) && (
+                  <>
+                    <div className="panel rounded-md p-4">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Live events</span>
+                      </div>
+                      <pre className="bg-bg border border-line rounded p-3 font-mono text-[10.5px] text-accent/90 leading-relaxed max-h-28 overflow-y-auto whitespace-pre-wrap">
+                        {liveEvents.length === 0 ? '// waiting…' : liveEvents.join('\n')}
+                      </pre>
+                    </div>
+                    <div className="panel rounded-md p-4">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Scan logs</span>
+                      </div>
+                      <pre className="bg-bg border border-line rounded p-3 font-mono text-[10.5px] text-muted leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">
+                        {logs || '// No logs yet.'}
+                      </pre>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
 };
+
+const FindingDetail: React.FC<{ vuln: any }> = ({ vuln }) => (
+  <div className="border-t border-line bg-bg p-4 text-[11.5px] space-y-4">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <KV label="State" value={vuln.state || 'NEW'} mono />
+      <KV label="OWASP" value={vuln.owasp || '—'} />
+      <KV label="MITRE ATT&CK" value={vuln.mitre || '—'} />
+      <KV label="CVSS" value={vuln.cvss != null ? String(vuln.cvss) : '—'} />
+    </div>
+
+    <div>
+      <p className="eyebrow mb-1">Description</p>
+      <p className="text-muted leading-relaxed">{vuln.description}</p>
+    </div>
+
+    {vuln.remediation && (
+      <div>
+        <p className="eyebrow mb-1">Recommended mitigation</p>
+        <p className="text-accent leading-relaxed">{vuln.remediation}</p>
+      </div>
+    )}
+
+    {vuln.rule_id && (
+      <div className="flex items-center gap-2">
+        <p className="eyebrow">Rule</p>
+        <span className="mono-cell text-[10px] text-faint">{vuln.rule_id}</span>
+        {vuln.cwe && <span className="mono-cell text-[10px] text-faint">CWE-{vuln.cwe}</span>}
+      </div>
+    )}
+
+    {vuln.evidence_observation_ids?.length > 0 && (
+      <div>
+        <p className="eyebrow mb-1.5">Evidence provenance</p>
+        <div className="flex flex-wrap gap-1.5">
+          {vuln.evidence_observation_ids.map((oid: number) => (
+            <span key={oid} className="mono-cell text-[10px] text-accent border border-line rounded px-2 py-0.5">
+              observation #{oid}
+            </span>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {vuln.proof_of_concept && (
+      <div>
+        <p className="eyebrow mb-1.5">Proof of concept</p>
+        <pre className="bg-surface-2 border border-line rounded p-3 font-mono text-[10px] text-muted overflow-x-auto whitespace-pre-wrap">
+          {vuln.proof_of_concept}
+        </pre>
+      </div>
+    )}
+  </div>
+);
+
+const KV: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (
+  <div>
+    <p className="eyebrow mb-0.5">{label}</p>
+    <p className={`text-[11px] text-muted break-words ${mono ? 'font-mono' : ''}`}>{value}</p>
+  </div>
+);
