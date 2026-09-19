@@ -3,29 +3,42 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
 import json
+import datetime
 from database.connection import get_db
-from database.models import Scan, Project, Vulnerability, ToolResult, Asset
-from database.schemas import ScanRequest, normalize_target
+from database.models import Scan, Project, Vulnerability, ToolResult, Asset, Observation
+from database.schemas import ScanRequest
 from app.core.auth import (
     get_current_user,
     get_or_create_user_project,
     get_owned_scan,
     is_target_in_scope,
 )
-from app.workers.tasks import trigger_background_scan
+from app.workers.tasks import trigger_background_scan, cancel_scan
+from app.agents import lifecycle
 from app.config import settings
 from database.models import User
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
 
-@router.post("/trigger")
-def trigger_scan(payload: ScanRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Triggers an authenticated scan for a target inside the user's scope."""
+class ScanCreate(ScanRequest):
+    """POST /scans payload: authorized target + optional job configuration.
+
+    ``tools`` toggles which scanners take part (default: all available),
+    ``severity`` applies an analysis threshold (default: report everything),
+    ``profile`` is an operator hint persisted for the record.
+    """
+    tools: dict[str, bool] | None = None
+    severity: str | None = None
+    profile: str | None = None
+
+
+def _create_and_enqueue(db: Session, user: User, target: str, config: dict | None = None) -> Scan:
+    """Shared creation path: scope check -> Scan(row) -> background enqueue."""
     project = get_or_create_user_project(db, user)
     assets = db.query(Asset).filter(Asset.project_id == project.id).all()
 
-    if not is_target_in_scope(payload.target, project, assets):
+    if not is_target_in_scope(target, project, assets):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -36,8 +49,10 @@ def trigger_scan(payload: ScanRequest, user: User = Depends(get_current_user), d
 
     new_scan = Scan(
         project_id=project.id,
-        target=payload.target,
+        target=target,
         status="Pending",
+        stage=lifecycle.QUEUED,
+        scan_config=dict(config or {}),
         logs="[System] Initializing Scan Request...\n"
     )
     db.add(new_scan)
@@ -47,14 +62,51 @@ def trigger_scan(payload: ScanRequest, user: User = Depends(get_current_user), d
     # Launch scanning asynchronously. The simulation flag is driven by the
     # SIMULATION_MODE configuration boundary, never hardcoded here.
     simulation = settings.simulation_mode
-    trigger_background_scan(new_scan.id, simulation=simulation)
+    new_scan.scan_config = dict(new_scan.scan_config or {})
+    new_scan.scan_config["simulation"] = simulation
+    db.commit()
+    db.refresh(new_scan)
+    trigger_background_scan(new_scan.id, simulation=simulation, config=new_scan.scan_config)
 
+    return new_scan
+
+
+@router.post("")
+def create_scan(payload: ScanCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """POST /scans: create and enqueue a scan with optional configuration."""
+    config = {}
+    if payload.tools is not None:
+        config["tools"] = {t: bool(payload.tools.get(t, True)) for t in
+                           ("subfinder", "assetfinder", "dnsx", "nmap", "httpx", "gau", "whatweb", "nuclei")}
+    if payload.severity:
+        config["severity"] = payload.severity
+    if payload.profile:
+        config["profile"] = payload.profile
+    if not config:
+        config = None
+
+    new_scan = _create_and_enqueue(db, user, payload.target, config)
     return {
         "scan_id": new_scan.id,
         "target": new_scan.target,
         "status": new_scan.status,
-        "simulation": simulation,
-        "created_at": new_scan.created_at
+        "stage": new_scan.stage,
+        "simulation": settings.simulation_mode,
+        "coverage": new_scan.coverage,
+        "created_at": new_scan.created_at,
+    }
+
+
+@router.post("/trigger")
+def trigger_scan(payload: ScanRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Backward-compatible trigger: enqueues a scan with default configuration."""
+    new_scan = _create_and_enqueue(db, user, payload.target, None)
+    return {
+        "scan_id": new_scan.id,
+        "target": new_scan.target,
+        "status": new_scan.status,
+        "simulation": settings.simulation_mode,
+        "created_at": new_scan.created_at,
     }
 
 
@@ -151,6 +203,32 @@ def get_scan_details(scan_id: int, user: User = Depends(get_current_user), db: S
     }
 
 
+@router.get("/coverage")
+def coverage_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Cross-scan coverage snapshot for the authenticated user (real metrics)."""
+    project_ids = [p.id for p in db.query(Project).filter(Project.user_id == user.id).all()]
+    scans = db.query(Scan).filter(Scan.project_id.in_(project_ids)).order_by(Scan.created_at.desc()).all() if project_ids else []
+    return {
+        "scans": [
+            {
+                "id": s.id,
+                "target": s.target,
+                "status": s.status,
+                "stage": s.stage,
+                "coverage": s.coverage,
+                "progress": s.progress or {},
+                "security_score": s.security_score,
+            }
+            for s in scans
+        ],
+        "average_coverage": None if not scans else _avg([s.coverage for s in scans if s.coverage is not None], None),
+    }
+
+
+def _avg(values: list, default=None):
+    return default if not values else round(sum(values) / len(values), 2)
+
+
 @router.get("/summary")
 def scan_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Aggregated, real metrics for the dashboard, across the user's own scans.
@@ -204,6 +282,199 @@ def scan_summary(user: User = Depends(get_current_user), db: Session = Depends(g
             for s in scans
         ],
     }
+
+
+@router.get("/{scan_id}")
+def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Full scan detail: lifecycle stage, progress, coverage, findings, tools."""
+    scan = get_owned_scan(db, user, scan_id)
+    vulnerabilities = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+    tool_results = db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
+    observations = db.query(Observation).filter(Observation.scan_id == scan_id).count()
+
+    return {
+        "id": scan.id,
+        "target": scan.target,
+        "status": scan.status,
+        "stage": scan.stage or lifecycle.QUEUED,
+        "security_score": scan.security_score,
+        "coverage": scan.coverage,
+        "progress": scan.progress or {},
+        "scan_config": scan.scan_config or {},
+        "created_at": scan.created_at,
+        "started_at": scan.started_at,
+        "completed_at": scan.completed_at,
+        "cancelled_at": scan.cancelled_at,
+        "error": scan.error,
+        "logs": scan.logs,
+        "simulation": bool((scan.scan_config or {}).get("simulation", settings.simulation_mode)),
+        "vulnerabilities": [
+            {
+                "id": v.id,
+                "title": v.title,
+                "severity": v.severity,
+                "description": v.description,
+                "remediation": v.remediation,
+                "cve": v.cve,
+                "cvss": v.cvss,
+                "owasp": v.owasp,
+                "mitre": v.mitre,
+                "cwe": v.cwe,
+                "rule_id": v.rule_id,
+                "state": v.state or "NEW",
+                "confidence": v.confidence,
+                "target": v.target,
+                "proof_of_concept": v.proof_of_concept,
+                "evidence": v.evidence,
+                "evidence_observation_ids": v.evidence_observation_ids or [],
+                "resolved_at": v.resolved_at,
+            }
+            for v in vulnerabilities
+        ],
+        "observations_count": observations,
+        "tools": [
+            {"name": tr.tool_name, "status": tr.status, "raw_output": tr.raw_output}
+            for tr in tool_results
+        ],
+    }
+
+
+@router.get("/{scan_id}/observations")
+def get_scan_observations(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Persisted evidence observations for a scan owned by the user."""
+    get_owned_scan(db, user, scan_id)
+    rows = db.query(Observation).filter(Observation.scan_id == scan_id).order_by(Observation.id.asc()).all()
+    return [
+        {"id": o.id, "tool": o.tool_name, "kind": o.kind, "subject": o.subject,
+         "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at}
+        for o in rows
+    ]
+
+
+@router.get("/{scan_id}/findings")
+def get_scan_findings(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Persisted findings (evidence-backed) for a scan owned by the user."""
+    get_owned_scan(db, user, scan_id)
+    rows = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).order_by(Vulnerability.id.asc()).all()
+    return [
+        {"id": v.id, "title": v.title, "severity": v.severity, "state": v.state or "NEW",
+         "rule_id": v.rule_id, "cve": v.cve, "cvss": v.cvss, "cwe": v.cwe, "owasp": v.owasp,
+         "target": v.target, "evidence": v.evidence,
+         "evidence_observation_ids": v.evidence_observation_ids or [],
+         "proof_of_concept": v.proof_of_concept, "remediation": v.remediation}
+        for v in rows
+    ]
+
+
+@router.get("/{scan_id}/coverage")
+def get_scan_coverage(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Coverage for one scan: planned vs completed tasks, honest percentages."""
+    scan = get_owned_scan(db, user, scan_id)
+    progress = scan.progress or {}
+    return {
+        "scan_id": scan.id,
+        "target": scan.target,
+        "coverage": scan.coverage,
+        "completed_tasks": progress.get("completed_tasks", 0),
+        "failed_tasks": progress.get("failed_tasks", 0),
+        "total_tasks": progress.get("total_tasks", 0),
+        "completed_tools": progress.get("completed_tools", 0),
+        "total_tools": progress.get("total_tools", 0),
+        "percent": progress.get("percent", 0),
+        "planned_tasks": progress.get("planned_tasks", []),
+        "security_score": scan.security_score,
+    }
+
+
+@router.post("/{scan_id}/cancel")
+def cancel_scan_job(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Request cancellation of a queued/running scan owned by the user."""
+    scan = get_owned_scan(db, user, scan_id)
+    if scan.stage and lifecycle.is_terminal(scan.stage):
+        return {"scan_id": scan.id, "status": scan.status, "message": "Scan already in a terminal state.", "stage": scan.stage}
+
+    requested = cancel_scan(scan_id)
+    if not requested:
+        # Never enqueued (e.g. backfilled row): mark cancelled immediately.
+        scan.stage = lifecycle.CANCELLED
+        scan.status = "Cancelled"
+        scan.cancelled_at = datetime.datetime.utcnow()
+        scan.updated_at = datetime.datetime.utcnow()
+        scan.logs += "[Worker] Scan cancelled by user; remaining stages abandoned.\n"
+        db.commit()
+    else:
+        scan.cancel_requested = True
+        scan.updated_at = datetime.datetime.utcnow()
+        db.commit()
+    return {"scan_id": scan.id, "status": "Cancelled", "stage": lifecycle.CANCELLED, "message": "Cancellation requested."}
+
+
+@router.get("/{scan_id}/events")
+async def stream_scan_events(
+    scan_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """SSE endpoint streaming real, persisted scan lifecycle events.
+
+    Events are derived from the persisted ``Scan`` row + child rows and only
+    emitted when they actually change: stage transitions, tool completions,
+    progress/coverage updates, findings, terminal resolution.  Never invented.
+    """
+    get_owned_scan(db, user, scan_id)
+
+    async def event_generator():
+        last = {"stage": None, "tools": set(), "findings": set(), "progress": None,
+                "completed_at": None}
+        while True:
+            local_db = next(get_db())
+            try:
+                scan = local_db.query(Scan).filter(Scan.id == scan_id).first()
+                if not scan:
+                    yield f"data: {json.dumps({'type': 'error', 'error': 'Scan ID not found'})}\n\n"
+                    break
+
+                tools = local_db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
+                findings = local_db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+
+                if (scan.stage or lifecycle.QUEUED) != last["stage"]:
+                    last["stage"] = scan.stage or lifecycle.QUEUED
+                    yield f"data: {json.dumps({'type': 'stage', 'stage': last['stage'], 'status': scan.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+                tool_ids = {tr.id for tr in tools}
+                for tr in tools:
+                    if tr.id not in last["tools"]:
+                        last["tools"].add(tr.id)
+                        yield f"data: {json.dumps({'type': 'tool', 'tool': tr.tool_name, 'status': tr.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+                finding_ids = {f.id for f in findings}
+                for f in findings:
+                    if f.id not in last["findings"]:
+                        last["findings"].add(f.id)
+                        yield f"data: {json.dumps({'type': 'finding', 'id': f.id, 'title': f.title, 'severity': f.severity, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+                progress = (scan.progress or {}).get("percent")
+                if progress != last["progress"]:
+                    last["progress"] = progress
+                    yield f"data: {json.dumps({'type': 'progress', 'percent': progress, 'coverage': scan.coverage, 'security_score': scan.security_score, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+                if scan.completed_at and scan.completed_at != last["completed_at"]:
+                    last["completed_at"] = scan.completed_at
+                    yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage or lifecycle.QUEUED, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
+                    break
+
+                if lifecycle.is_terminal(scan.stage or ""):
+                    yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
+                    break
+
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                break
+            finally:
+                local_db.close()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/{scan_id}/stream")

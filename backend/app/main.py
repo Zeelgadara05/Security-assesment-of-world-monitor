@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database.connection import verify_schema, seed_defaults
 from app.config import settings
-from app.api import scans, chat, reports, auth, findings
+from app.api import scans, chat, reports, auth, findings, tools
 
 app = FastAPI(
     title="CyberAgent API",
@@ -35,6 +35,7 @@ app.include_router(scans.router)
 app.include_router(chat.router)
 app.include_router(reports.router)
 app.include_router(findings.router)
+app.include_router(tools.router)
 
 @app.get("/")
 def read_root():

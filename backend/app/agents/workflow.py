@@ -11,16 +11,125 @@ from app.tools.scanner_tools import (
 )
 from app.tools import real_probes
 from app.assess import finding_rules
+from app.agents import lifecycle
+from app.workers.tasks import registry, ScanCancelled
 
 logger = logging.getLogger("cyberagent.workflow")
 
+# ---------------------------------------------------------------------------
+# Stage definitions: ordered lifecycle + the tasks each stage owns.
+# Every planned task is counted for coverage; a task only counts as
+# completed when its ToolResult row reaches the "Completed" status.
+# NOT_INSTALLED tools never increase coverage, so a truncated tool set
+# honestly lowers the assessment coverage metric.
+# ---------------------------------------------------------------------------
+ALL_TOOLS = ["subfinder", "assetfinder", "dnsx", "nmap", "httpx", "gau", "whatweb", "nuclei"]
 
-def orchestrate_scan(scan_id: int, simulation: bool = True):
-    """Full multi-agent workflow.
+STAGE_TOOLS = {
+    lifecycle.RECON: ["subfinder", "assetfinder"],
+    lifecycle.DISCOVERY: ["dnsx"],
+    lifecycle.SERVICE_SCAN: ["nmap"],
+    lifecycle.HTTP_SCAN: ["httpx", "gau", "whatweb"],
+    lifecycle.VULNERABILITY_SCAN: ["nuclei"],
+}
 
-    Planner -> Recon -> Scanning -> Real Evidence Pipeline -> Analysis (findings
-    derived exclusively from persisted observations) -> Report (strictly
-    downstream of the persisted findings).
+# Stdlib probe groups only run in real mode; each group is one planned task.
+PROBE_TOOLS = ["real_dns", "real_tcp", "real_http"]
+
+SEVERITY_THRESHOLD = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "all": -1}
+
+
+def _merge_config(requested: dict | None, stored: dict | None) -> dict:
+    """Sanitize a scan-config payload into the persisted scan_config shape."""
+    base = dict(stored or {})
+    req = dict(requested or {})
+    tools_req = req.get("tools")
+    if isinstance(tools_req, dict):
+        normalized = {}
+        for name in ALL_TOOLS:
+            if name in tools_req:
+                normalized[name] = bool(tools_req.get(name))
+            else:
+                normalized[name] = bool((base.get("tools") or {}).get(name, True))
+        base["tools"] = normalized
+    else:
+        base["tools"] = dict(base.get("tools") or {t: True for t in ALL_TOOLS})
+    severity = str(req.get("severity") or base.get("severity") or "all").lower()
+    base["severity"] = severity if severity in SEVERITY_THRESHOLD else "all"
+    base["profile"] = str(req.get("profile") or base.get("profile") or "steady")
+    return base
+
+
+def _enabled_tools(config: dict) -> dict:
+    return {t: bool((config or {}).get("tools", {}).get(t, True)) for t in ALL_TOOLS}
+
+
+# ---------------------------------------------------------------------------
+# Stage / progress persistence helpers
+# ---------------------------------------------------------------------------
+def _set_stage(db, scan: Scan, stage: str, log_line: str):
+    """Transition the job stage, derive coarse status, and append a log line."""
+    scan.stage = stage
+    if not lifecycle.is_terminal(stage):
+        scan.status = lifecycle.coarse_status(stage)
+    scan.updated_at = datetime.datetime.utcnow()
+    scan.logs = (scan.logs or "") + log_line + "\n"
+    db.commit()
+
+
+def _persist_progress(db, scan: Scan, progress: dict):
+    """Persist structured progress + the derived coverage metric."""
+    progress["percent"] = 0
+    total = progress.get("total_tasks") or 0
+    completed = progress.get("completed_tasks") or 0
+    if total > 0:
+        progress["percent"] = round(100.0 * min(completed, total) / total, 1)
+    scan.progress = progress
+    scan.coverage = lifecycle.compute_coverage(progress)
+    scan.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+
+def _check_cancel(scan_id: int):
+    job = registry.get(scan_id)
+    if job is not None and job.is_cancelled():
+        raise ScanCancelled()
+
+
+def _planned_tasks(config: dict, simulation: bool) -> list[str]:
+    """The ordered list of planned tool/probe task names for this run."""
+    enabled = _enabled_tools(config)
+    planned = []
+    for stage in lifecycle.STAGES:
+        for tool in STAGE_TOOLS.get(stage, []):
+            if enabled.get(tool):
+                planned.append(tool)
+    if not simulation:
+        planned += PROBE_TOOLS
+    return planned
+
+
+def _seed_progress(db, scan: Scan, config: dict, simulation: bool):
+    planned = _planned_tasks(config, simulation)
+    progress = lifecycle.empty_progress()
+    progress["total_tasks"] = len(planned)
+    progress["total_tools"] = len([t for t in planned if t not in PROBE_TOOLS])
+    progress["planned_tasks"] = planned
+    _persist_progress(db, scan, progress)
+    return progress
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (lifecycle: staged, cancellable, coverage-aware)
+# ---------------------------------------------------------------------------
+def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None = None):
+    """Run a scan through the lifecycle as a background job.
+
+    Stages advance in order (recon -> discovery -> service_scan -> http_scan ->
+    vulnerability_scan -> analysis -> reporting -> completed).  Progress and
+    coverage are persisted; cancellation is honored between stages/tools and
+    inside the stdlib probe loops.  Findings are ALWAYS derived exclusively
+    from persisted observations -- never fabricated.
     """
     db = SessionLocal()
     scan = None
@@ -30,9 +139,14 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
             logger.error(f"Scan ID {scan_id} not found in database.")
             return
 
-        scan.status = "Running"
-        scan.logs = "[Planner Agent] Init: Analyzing scan target security posture...\n"
-        db.commit()
+        job = registry.get(scan_id)
+        if job is not None:
+            job.attach_thread(__import__("threading").current_thread())
+
+        config = _merge_config(config, scan.scan_config)
+        scan.scan_config = config
+        scan.started_at = datetime.datetime.utcnow()
+        _set_stage(db, scan, lifecycle.STARTING, "[Worker] Scan job started; scheduling stages.")
 
         if simulation:
             scan.logs += (
@@ -43,115 +157,102 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
             db.commit()
 
         target = scan.target
-        time.sleep(1)
+        progress = _seed_progress(db, scan, config, simulation)
+        enabled = _enabled_tools(config)
+        severity_filter = config.get("severity") or "all"
 
         # ----------------------------------------------------
-        # 1. PLANNER AGENT
+        # RECON stage -- passive subdomain discovery
         # ----------------------------------------------------
-        scan.logs += f"[Planner Agent] Target validated: {target}\n"
-        scan.logs += "[Planner Agent] Scheduling Recon tools: subfinder, assetfinder, dnsx, real_dns\n"
-        scan.logs += "[Planner Agent] Scheduling Port tools: nmap, real_tcp\n"
-        scan.logs += "[Planner Agent] Scheduling Web / Vuln tools: httpx, WhatWeb, gau, nuclei, real_http\n"
-        db.commit()
-        time.sleep(1.5)
+        _set_stage(db, scan, lifecycle.RECON, "[Recon] Gathering subdomains (subfinder, assetfinder)...")
+        subdomains: list[str] = []
+        subfinder_res = _run_tool(db, scan, "subfinder", enabled, simulation,
+                                   lambda: run_subfinder(target, simulation), progress)
+        asset_res = _run_tool(db, scan, "assetfinder", enabled, simulation,
+                              lambda: run_assetfinder(target, simulation), progress)
+        subdomains = list(set(subfinder_res.get("subdomains", []) + asset_res.get("subdomains", [])))
 
         # ----------------------------------------------------
-        # 2. RECON AGENT
+        # DISCOVERY stage -- DNS resolution (scope-gated)
         # ----------------------------------------------------
-        scan.logs += "[Recon Agent] Starting passive subdomain gathering via subfinder...\n"
-        db.commit()
-        subfinder_res = run_subfinder(target, simulation)
-        save_tool_result(db, scan.id, "subfinder", subfinder_res, simulated=simulation)
+        _set_stage(db, scan, lifecycle.DISCOVERY, "[Discovery] Resolving discovered subdomains (dnsx)...")
+        candidates = list(dict.fromkeys([target] + [s for s in subdomains if s != target]))
+        hosts = _in_scope_hosts(db, scan, candidates)
+        dnsx_res = _run_tool(db, scan, "dnsx", enabled, simulation,
+                             lambda: run_dnsx(target, hosts if hosts else [target], simulation), progress)
 
-        scan.logs += "[Recon Agent] Running assetfinder discovery...\n"
-        db.commit()
-        asset_res = run_assetfinder(target, simulation)
-        save_tool_result(db, scan.id, "assetfinder", asset_res, simulated=simulation)
-
-        # Extract unique subdomains
-        subdomains = list(set((subfinder_res.get("subdomains", [])) + (asset_res.get("subdomains", []))))
-        if not subdomains:
-            subdomains = [target]
-
-        scan.logs += f"[Recon Agent] Total unique subdomains identified: {len(subdomains)}\n"
-        scan.logs += "[Recon Agent] Checking DNS resolution using dnsx...\n"
-        db.commit()
-        dnsx_res = run_dnsx(target, subdomains, simulation)
-        save_tool_result(db, scan.id, "dnsx", dnsx_res, simulated=simulation)
-
-        # Add domains and IPs as assets
-        for sub in subdomains:
-            add_asset(db, scan.project_id, "domain", sub, {"status": "active"})
+        for sub in hosts:
+            add_asset(db, scan.project_id, "domain", sub, {"status": "discovered", "source": "recon"})
         for item in dnsx_res.get("resolved", []):
-            add_asset(db, scan.project_id, "ip", item["ip"], {"domain": item["subdomain"]})
+            add_asset(db, scan.project_id, "ip", item["ip"], {"domain": item["subdomain"], "source": "dnsx"})
         db.commit()
 
         # ----------------------------------------------------
-        # 3. SCANNING AGENT
+        # SERVICE_SCAN stage -- port/service discovery
         # ----------------------------------------------------
-        scan.logs += "[Scanning Agent] Initializing port and service scanning with nmap...\n"
-        db.commit()
-        nmap_res = run_nmap(target, simulation)
-        save_tool_result(db, scan.id, "nmap", nmap_res, simulated=simulation)
-
+        _set_stage(db, scan, lifecycle.SERVICE_SCAN, "[Service Scan] Probing services (nmap)...")
+        nmap_res = _run_tool(db, scan, "nmap", enabled, simulation,
+                             lambda: run_nmap(target, simulation), progress)
         for p in nmap_res.get("ports", []):
-            if p["state"] == "open":
+            if p.get("state") == "open":
                 add_asset(db, scan.project_id, "port", f"{p['port']}/{p['protocol']}", {
-                    "service": p["service"], "product": p["product"], "version": p["version"]
+                    "service": p.get("service"), "product": p.get("product"),
+                    "version": p.get("version"), "source": "nmap",
                 })
         db.commit()
 
-        scan.logs += "[Scanning Agent] Probing live web servers with httpx...\n"
-        db.commit()
-        httpx_res = run_httpx(target, simulation)
-        save_tool_result(db, scan.id, "httpx", httpx_res, simulated=simulation)
-
-        scan.logs += "[Scanning Agent] Harvesting web routes using gau...\n"
-        db.commit()
-        gau_res = run_gau(target, simulation)
-        save_tool_result(db, scan.id, "gau", gau_res, simulated=simulation)
-
-        scan.logs += "[Scanning Agent] Profiling server technologies via WhatWeb...\n"
-        db.commit()
-        whatweb_res = run_whatweb(target, simulation)
-        save_tool_result(db, scan.id, "whatweb", whatweb_res, simulated=simulation)
-
+        # ----------------------------------------------------
+        # HTTP_SCAN stage -- web probing, URL discovery, tech fingerprinting
+        # ----------------------------------------------------
+        _set_stage(db, scan, lifecycle.HTTP_SCAN, "[HTTP Scan] Probing web layer (httpx, gau, whatweb)...")
+        httpx_res = _run_tool(db, scan, "httpx", enabled, simulation,
+                              lambda: run_httpx(target, simulation), progress)
+        gau_res = _run_tool(db, scan, "gau", enabled, simulation,
+                            lambda: run_gau(target, simulation), progress)
+        whatweb_res = _run_tool(db, scan, "whatweb", enabled, simulation,
+                                lambda: run_whatweb(target, simulation), progress)
         for tech in whatweb_res.get("techs", []):
-            add_asset(db, scan.project_id, "tech", tech, {})
+            add_asset(db, scan.project_id, "tech", tech, {"source": "whatweb"})
         db.commit()
-
-        scan.logs += "[Scanning Agent] Starting Nuclei active vulnerability tests...\n"
-        db.commit()
-        nuclei_res = run_nuclei(target, simulation)
-        save_tool_result(db, scan.id, "nuclei", nuclei_res, simulated=simulation)
 
         # ----------------------------------------------------
-        # 4A. REAL EVIDENCE PIPELINE (real mode only)
+        # VULNERABILITY_SCAN stage -- nuclei (real engine output only)
+        # ----------------------------------------------------
+        _set_stage(db, scan, lifecycle.VULNERABILITY_SCAN, "[Vulnerability Scan] Running nuclei...")
+        nuclei_res = _run_tool(db, scan, "nuclei", enabled, simulation,
+                               lambda: run_nuclei(target, simulation), progress)
+
+        # ----------------------------------------------------
+        # REAL EVIDENCE PIPELINE (real mode only): stdlib probes +
+        # nuclei output -> persisted observations.
         # ----------------------------------------------------
         if not simulation:
-            scan.logs += "[Evidence Agent] Running real DNS/TCP/HTTP probes and persisting observations...\n"
-            db.commit()
-            _run_real_evidence_pipeline(db, scan, target, subdomains, nuclei_res)
+            _set_stage(db, scan, lifecycle.VULNERABILITY_SCAN,
+                       "[Evidence] Running real DNS/TCP/HTTP probes and persisting observations...")
+            _run_real_evidence_pipeline(db, scan, target, hosts, nuclei_res, enabled, progress)
 
         # ----------------------------------------------------
-        # 4B. ANALYSIS AGENT -- findings from persisted observations only
+        # ANALYSIS stage -- findings from persisted observations only
         # ----------------------------------------------------
-        scan.logs += "[AI Analysis Agent] Deriving findings exclusively from persisted observations...\n"
-        db.commit()
-        time.sleep(2)
+        _set_stage(db, scan, lifecycle.ANALYSIS, "[Analysis] Deriving findings exclusively from persisted observations...")
+        time.sleep(0.5 if simulation else 1)
 
         if simulation:
-            # A simulated run has no observations and must never synthesize
-            # findings. Score stays at the documented clean baseline.
             scan.security_score = 100
             scan.logs += (
-                "[AI Analysis Agent] Simulation mode: 0 observations, 0 findings. "
+                "[Analysis] Simulation mode: 0 observations, 0 findings. "
                 "No security findings were fabricated.\n"
             )
             db.commit()
         else:
             observations = _scan_observations(db, scan.id)
             candidates = finding_rules.evaluate_observations(observations)
+            if severity_filter and severity_filter in SEVERITY_THRESHOLD and severity_filter != "all":
+                threshold = SEVERITY_THRESHOLD[severity_filter]
+                candidates = [
+                    c for c in candidates
+                    if SEVERITY_THRESHOLD.get((c.get("severity") or "info").lower(), 99) >= threshold
+                ]
             existing = db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).all()
             existing_keys = {
                 v.dedup_key for v in existing
@@ -159,27 +260,26 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
             }
             candidates = finding_rules.deduplicate(candidates, existing_keys)
             for candidate in candidates:
+                _check_cancel(scan.id)
                 db.add(_persisted_finding(scan, candidate, target))
             db.commit()
             scan.logs += (
-                f"[AI Analysis Agent] Rule engine applied to {len(observations)} observations "
+                f"[Analysis] Rule engine applied to {len(observations)} observations "
                 f"produced {len(candidates)} evidence-backed finding(s).\n"
             )
             findings = db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).all()
             finding_dicts = [{"severity": f.severity or "Info", "state": f.state or "NEW"} for f in findings]
             scan.security_score = finding_rules.compute_score(finding_dicts)
             scan.logs += (
-                f"[AI Analysis Agent] Evaluation complete. Security score calculated "
+                f"[Analysis] Evaluation complete. Security score calculated "
                 f"from {len(findings)} persisted finding(s): {scan.security_score}/100\n"
             )
             db.commit()
 
         # ----------------------------------------------------
-        # 5. REPORT GENERATOR -- strictly downstream of persisted data
+        # REPORTING stage -- strictly downstream of persisted data
         # ----------------------------------------------------
-        scan.logs += "[Reporting Agent] Generating report from PERSISTED findings and observations...\n"
-        db.commit()
-        time.sleep(1.5)
+        _set_stage(db, scan, lifecycle.REPORTING, "[Reporting] Generating report from persisted findings and observations...")
 
         findings = db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).order_by(Vulnerability.id.asc()).all()
         observations = _scan_observations(db, scan.id)
@@ -200,71 +300,154 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
             json_content={
                 "target": target,
                 "security_score": scan.security_score,
+                "security_coverage": scan.coverage,
                 "simulation": simulation,
                 "findings": findings_payload,
                 "observations": observations_payload,
-                "subdomains": subdomains,
+                "subdomains": hosts,
+                "coverage": scan.coverage,
             },
             html_content=html_report,
-            pdf_content=markdown_report.encode("utf-8")  # Storing markdown source as pdf mock bytes
+            pdf_content=markdown_report.encode("utf-8")
         )
         db.add(report_obj)
+        db.commit()
 
-        scan.status = "Completed"
-        scan.completed_at = datetime.datetime.utcnow()
-        scan.logs += "[Reporting Agent] Completed. Report artifacts ready for download.\n"
+        # ----------------------------------------------------
+        # Terminal transition
+        # ----------------------------------------------------
+        _check_cancel(scan.id)
+        failed_tasks = progress.get("failed_tasks") or 0
+        if failed_tasks > 0:
+            _set_stage(db, scan, lifecycle.PARTIAL,
+                       "[Reporting] Scan completed with partial success "
+                       f"({failed_tasks} planned task(s) failed).")
+        else:
+            _set_stage(db, scan, lifecycle.COMPLETED, "[Reporting] Scan completed.")
+        scan.status = lifecycle.coarse_status(scan.stage)
+        if scan.status in ("Completed", "Partially Completed"):
+            scan.completed_at = datetime.datetime.utcnow()
+        scan.updated_at = datetime.datetime.utcnow()
         if simulation:
             scan.logs += "[SIMULATION] This scan ran in simulation mode; findings would be synthetic (none produced).\n"
         db.commit()
 
+    except ScanCancelled:
+        logger.info(f"Scan {scan_id} cancelled.")
+        if scan is not None:
+            scan.stage = lifecycle.CANCELLED
+            scan.status = "Cancelled"
+            scan.cancelled_at = datetime.datetime.utcnow()
+            scan.updated_at = datetime.datetime.utcnow()
+            scan.logs += "[Worker] Scan cancelled by user; remaining stages abandoned.\n"
+            db.commit()
     except Exception as e:
         logger.error(f"Error in orchestrating scan: {e}")
         if scan is not None:
+            scan.stage = lifecycle.FAILED
             scan.status = "Failed"
+            scan.error = str(e)[:500]
             scan.completed_at = datetime.datetime.utcnow()
+            scan.updated_at = datetime.datetime.utcnow()
             scan.logs += f"[System Error] Scan failed due to: {e}\n"
             db.commit()
     finally:
         db.close()
 
 
+def _run_tool(db, scan: Scan, tool_name: str, enabled: dict, simulation: bool,
+              runner, progress: dict) -> dict:
+    """Run one tool as a planned task, persist its result, and update progress.
+
+    Returns an honest empty result shape when the tool is disabled by config.
+    """
+    if not enabled.get(tool_name):
+        fake = {"tool": tool_name, "status": "skipped", "log": f"[{tool_name}] DISABLED by scan configuration."}
+        return fake
+
+    _check_cancel(scan.id)
+    scan.logs += f"[{tool_name}] executing...\n"
+    db.commit()
+    result = runner()
+    status = result.get("status") or ""
+    save_tool_result(db, scan.id, tool_name, result, simulated=simulation)
+    if status == "success":
+        progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
+        progress["completed_tools"] = (progress.get("completed_tools") or 0) + 1
+    elif status in (STATE_EXECUTION_FAILED, STATE_TIMEOUT, STATE_PARSE_FAILED):
+        progress["failed_tasks"] = (progress.get("failed_tasks") or 0) + 1
+    progress["last_tool"] = tool_name
+    _persist_progress(db, scan, progress)
+    _check_cancel(scan.id)
+    return result
+
+
+def _run_probe(db, scan: Scan, tool_name: str, report_runner, progress: dict):
+    """Run a stdlib probe group as one planned task (real mode only)."""
+    _check_cancel(scan.id)
+    result = report_runner()
+    _persist_probe(db, scan, tool_name, result)
+    progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
+    progress["last_tool"] = tool_name
+    _persist_progress(db, scan, progress)
+    _check_cancel(scan.id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Scope guards for discovered hosts (never probe what is not authorized)
+# ---------------------------------------------------------------------------
+def _in_scope_hosts(db, scan: Scan, candidates: list[str]) -> list[str]:
+    from app.core.auth import is_target_in_scope
+    from database.models import Project, Asset
+
+    project = db.query(Project).filter(Project.id == scan.project_id).first()
+    assets = db.query(Asset).filter(Asset.project_id == scan.project_id).all()
+    out = []
+    for host in candidates:
+        if host == scan.target:
+            out.append(host)
+            continue
+        if project is not None and is_target_in_scope(host, project, assets):
+            out.append(host)
+        else:
+            db.add(Observation(
+                scan_id=scan.id,
+                tool_name="scope_guard",
+                kind="out_of_scope_skipped",
+                subject=host,
+                data_json={"reason": "discovered host outside authorized scope",
+                           "scope": project.scope_json if project else []},
+                raw_output=f"[scope_guard] Skipped {host}: discovered host outside authorized scope.",
+            ))
+            scan.logs += f"[scope_guard] Skipped out-of-scope host {host}; not scanned.\n"
+    db.commit()
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Real evidence pipeline
 # ---------------------------------------------------------------------------
-def _run_real_evidence_pipeline(db, scan: Scan, target: str, subdomains: list, nuclei_res: dict):
+def _run_real_evidence_pipeline(db, scan: Scan, target: str, subdomains: list, nuclei_res: dict,
+                                enabled: dict | None = None, progress: dict | None = None):
     """Real probes -> observations + assets. External nuclei output, when real,
     is normalized into ``nuclei_finding`` observations before the rule engine sees it."""
+    enabled = enabled if enabled else {t: True for t in ALL_TOOLS}
+    progress = progress if progress is not None else lifecycle.empty_progress()
     hosts = list(dict.fromkeys([target] + [s for s in subdomains if s != target]))
 
-    # 1. DNS resolution (per host); resolved IPs become evidenced assets.
-    for host in hosts:
-        report = real_probes.dns_probe(host)
-        _persist_probe(db, scan, "real_dns", report)
-        for obs in report["observations"]:
-            if obs["kind"] == "dns_record":
-                add_asset(db, scan.project_id, "ip", obs["data"]["ip"],
-                          {"domain": obs["data"]["host"], "source": "real_dns"})
-    db.commit()
+    if enabled.get("dnsx") is not False:
+        for host in hosts:
+            _run_probe(db, scan, "real_dns", lambda h=host: real_probes.dns_probe(h), progress)
 
-    # 2. TCP connect scan over each host.
     for host in hosts:
-        report = real_probes.tcp_probe(host)
-        _persist_probe(db, scan, "real_tcp", report)
-        for obs in report["observations"]:
-            if obs["kind"] == "tcp_open":
-                add_asset(db, scan.project_id, "port", f"{obs['data']['port']}/tcp",
-                          {"state": "open", "source": "real_tcp"})
-    db.commit()
+        _run_probe(db, scan, "real_tcp", lambda h=host: real_probes.tcp_probe(h), progress)
 
-    # 3. HTTP(S) fingerprint probes (headers, title, body fingerprint).
     for host in hosts:
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}"
-            report = real_probes.http_probe(url)
-            _persist_probe(db, scan, "real_http", report)
-    db.commit()
+            _run_probe(db, scan, "real_http", lambda u=url: real_probes.http_probe(u), progress)
 
-    # 4. Nuclei engine output (real mode) -> observations, verbatim.
     for record in (nuclei_res.get("vulnerabilities") or []):
         db.add(Observation(
             scan_id=scan.id,
@@ -285,6 +468,7 @@ def _run_real_evidence_pipeline(db, scan: Scan, target: str, subdomains: list, n
             },
             raw_output=(record.get("proof_of_concept") or json.dumps(record, default=str)),
         ))
+    _persist_progress(db, scan, progress)
     db.commit()
 
 
@@ -304,6 +488,9 @@ def _persist_probe(db, scan: Scan, tool_name: str, report: dict):
                      simulated=False)
 
 
+# ---------------------------------------------------------------------------
+# Extraction helpers
+# ---------------------------------------------------------------------------
 def _scan_observations(db, scan_id: int) -> list:
     rows = db.query(Observation).filter(Observation.scan_id == scan_id).order_by(Observation.id.asc()).all()
     return [
@@ -383,6 +570,7 @@ def save_tool_result(db, scan_id: int, tool_name: str, result: dict, simulated: 
         STATE_TIMEOUT: STATE_TIMEOUT,
         STATE_PARSE_FAILED: STATE_PARSE_FAILED,
         STATE_EXECUTION_FAILED: "Failed",
+        "skipped": "Skipped",
     }
     status = status_map.get(result.get("status"), "Failed")
     tool_result = ToolResult(
@@ -412,6 +600,7 @@ def generate_markdown_report_content(scan, findings, observations, simulation=Fa
     buf.append(f"**Target**: `{scan.target}`")
     buf.append(f"**Date**: {timestamp}")
     buf.append(f"**Security Score**: `{scan.security_score}/100`")
+    buf.append(f"**Assessment Coverage**: `{scan.coverage if scan.coverage is not None else 'n/a'}%`")
     buf.append(f"**Status**: `COMPLETED`")
     buf.append(f"**Mode**: `{mode}`")
     buf.append("")

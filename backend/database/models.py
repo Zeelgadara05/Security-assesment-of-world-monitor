@@ -60,12 +60,30 @@ class Asset(Base):
 
 
 class Scan(Base):
+    """A single security assessment job (Phase 4: job lifecycle model).
+
+    ``status`` is the coarse, terminal-compatible state used across the API
+    (Pending/Running/Completed/Failed/Cancelled). ``stage`` tracks the detailed
+    job lifecycle (queued/starting/recon/discovery/service_scan/http_scan/
+    vulnerability_scan/analysis/reporting) and is the source of progress events.
+    ``progress`` and ``coverage`` are structured, persisted progress metadata and
+    are never fabricated: counters increment only from real stage/tool completions.
+    """
     __tablename__ = "scans"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     target = Column(String(255), nullable=False)  # IP, domain, or CIDR
-    status = Column(String(50), default="Pending")  # "Pending", "Running", "Completed", "Failed"
+    status = Column(String(50), default="Pending")  # "Pending", "Running", "Completed", "Failed", "Cancelled"
+    stage = Column(String(50), default="queued")  # job lifecycle stage (see app.agents.lifecycle)
+    progress = Column(JSON, default=dict)  # {completed_tasks, total_tasks, completed_tools, total_tools, ...}
+    coverage = Column(Float, nullable=True)  # assessment coverage % (0-100), distinct from risk score
+    scan_config = Column(JSON, default=dict)  # enabled tools / severity profile captured at trigger
+    cancel_requested = Column(Boolean, default=False)
+    started_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
     security_score = Column(Integer, default=100)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
