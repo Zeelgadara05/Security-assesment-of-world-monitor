@@ -1,12 +1,9 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-import os
-from .models import Base, User, Project, Scan, Vulnerability, Asset
+from .models import Base, User, Project, Scan, Vulnerability, Asset, ToolResult, Report, ChatHistory
+from app.config import settings
 
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./cyberagent.db")
+DATABASE_URL = settings.database_url
 
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+pg8000://", 1)
@@ -21,10 +18,31 @@ def get_db():
     finally:
         db.close()
 
-def init_db():
-    Base.metadata.create_all(bind=engine)
-    # Seed default user & demo project if not exists
-    db = SessionLocal()
+def verify_schema(engine=engine):
+    """Fails loudly when the database has not been migrated.
+
+    Production startup assumes the schema is managed by Alembic migrations.
+    This function never creates, drops, or alters tables.
+    """
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    expected = set(Base.metadata.tables.keys())
+    missing = expected - existing
+    if missing:
+        raise RuntimeError(
+            "Database schema is missing table(s): {}."
+            " Run 'alembic upgrade head' before starting the application.".format(", ".join(sorted(missing)))
+        )
+
+def seed_defaults(db=None):
+    """Idempotently seeds the demo user and Default Sandbox project.
+
+    This does not create or drop any table; it only inserts rows when they
+    do not exist yet. Safe to call on every startup.
+    """
+    owns_session = db is None
+    if owns_session:
+        db = SessionLocal()
     try:
         demo_user = db.query(User).filter(User.id == "demo-user-id").first()
         if not demo_user:
@@ -43,7 +61,7 @@ def init_db():
             db.add(demo_project)
             db.commit()
             db.refresh(demo_project)
-            
+
             # Add some seed assets
             assets = [
                 Asset(project_id=demo_project.id, type="domain", value="sandbox.cyberagent.ai", metadata_json={"status": "active"}),
@@ -55,8 +73,9 @@ def init_db():
             ]
             db.add_all(assets)
             db.commit()
-    except Exception as e:
-        print(f"Error seeding database: {e}")
+    except Exception:
         db.rollback()
+        raise
     finally:
-        db.close()
+        if owns_session:
+            db.close()

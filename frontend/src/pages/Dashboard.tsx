@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldAlert, Play, ArrowRight, ShieldCheck, Activity, Award, CheckCircle, RefreshCw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
+import { API_URL } from '../api';
 
 export const Dashboard: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
@@ -8,7 +9,7 @@ export const Dashboard: React.FC = () => {
 
   const fetchScans = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8001/scans/list');
+      const res = await fetch(`${API_URL}/scans/list`);
       if (res.ok) {
         const data = await res.json();
         setScans(data);

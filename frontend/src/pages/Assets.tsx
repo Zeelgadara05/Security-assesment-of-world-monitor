@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ReactFlow, MiniMap, Controls, Background, useNodesState, useEdgesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Server, Globe, ShieldAlert, Cpu } from 'lucide-react';
+import { API_URL } from '../api';
 
 export const Assets: React.FC = () => {
   const [assets, setAssets] = useState<any[]>([]);

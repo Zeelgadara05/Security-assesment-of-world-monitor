@@ -1,5 +1,6 @@
 import time
 import random
+import datetime
 import logging
 from database.connection import SessionLocal
 from database.models import Scan, ToolResult, Vulnerability, Asset, Report
@@ -26,6 +27,13 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs = "[Planner Agent] Init: Analyzing scan target security posture...\n"
         db.commit()
 
+        if simulation:
+            scan.logs += (
+                "[SIMULATION] Scan running in SIMULATION_MODE: all generated output is "
+                "synthetic and must NOT be treated as a real security assessment.\n"
+            )
+            db.commit()
+
         target = scan.target
         time.sleep(1)
 
@@ -45,12 +53,12 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs += f"[Recon Agent] Starting passive subdomain gathering via subfinder...\n"
         db.commit()
         subfinder_res = run_subfinder(target, simulation)
-        save_tool_result(db, scan.id, "subfinder", subfinder_res)
+        save_tool_result(db, scan.id, "subfinder", subfinder_res, simulated=simulation)
 
         scan.logs += f"[Recon Agent] Running assetfinder discovery...\n"
         db.commit()
         asset_res = run_assetfinder(target, simulation)
-        save_tool_result(db, scan.id, "assetfinder", asset_res)
+        save_tool_result(db, scan.id, "assetfinder", asset_res, simulated=simulation)
 
         # Extract unique subdomains
         subdomains = list(set((subfinder_res.get("subdomains", [])) + (asset_res.get("subdomains", []))))
@@ -61,7 +69,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs += f"[Recon Agent] Checking DNS resolution using dnsx...\n"
         db.commit()
         dnsx_res = run_dnsx(target, subdomains, simulation)
-        save_tool_result(db, scan.id, "dnsx", dnsx_res)
+        save_tool_result(db, scan.id, "dnsx", dnsx_res, simulated=simulation)
 
         # Add domains and IPs as assets
         for sub in subdomains:
@@ -76,7 +84,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs += f"[Scanning Agent] Initializing port and service scanning with nmap...\n"
         db.commit()
         nmap_res = run_nmap(target, simulation)
-        save_tool_result(db, scan.id, "nmap", nmap_res)
+        save_tool_result(db, scan.id, "nmap", nmap_res, simulated=simulation)
 
         # Add open ports as assets
         for p in nmap_res.get("ports", []):
@@ -89,17 +97,17 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs += f"[Scanning Agent] Probing live web servers with httpx...\n"
         db.commit()
         httpx_res = run_httpx(target, simulation)
-        save_tool_result(db, scan.id, "httpx", httpx_res)
+        save_tool_result(db, scan.id, "httpx", httpx_res, simulated=simulation)
 
         scan.logs += f"[Scanning Agent] Harvesting web routes using gau...\n"
         db.commit()
         gau_res = run_gau(target, simulation)
-        save_tool_result(db, scan.id, "gau", gau_res)
+        save_tool_result(db, scan.id, "gau", gau_res, simulated=simulation)
 
         scan.logs += f"[Scanning Agent] Profiling server technologies via WhatWeb...\n"
         db.commit()
         whatweb_res = run_whatweb(target, simulation)
-        save_tool_result(db, scan.id, "whatweb", whatweb_res)
+        save_tool_result(db, scan.id, "whatweb", whatweb_res, simulated=simulation)
 
         for tech in whatweb_res.get("techs", []):
             add_asset(db, scan.project_id, "tech", tech, {})
@@ -108,7 +116,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         scan.logs += f"[Scanning Agent] Starting Nuclei active vulnerability tests...\n"
         db.commit()
         nuclei_res = run_nuclei(target, simulation)
-        save_tool_result(db, scan.id, "nuclei", nuclei_res)
+        save_tool_result(db, scan.id, "nuclei", nuclei_res, simulated=simulation)
 
         # ----------------------------------------------------
         # 4. AI ANALYSIS AGENT
@@ -177,24 +185,34 @@ def orchestrate_scan(scan_id: int, simulation: bool = True):
         db.add(report_obj)
 
         scan.status = "Completed"
+        scan.completed_at = datetime.datetime.utcnow()
         scan.logs += f"[Reporting Agent] Completed. Report artifacts ready for download.\n"
+        if simulation:
+            scan.logs += "[SIMULATION] This scan ran in simulation mode; findings are synthetic.\n"
         db.commit()
 
     except Exception as e:
         logger.error(f"Error in orchestrating scan: {e}")
         if scan:
             scan.status = "Failed"
+            scan.completed_at = datetime.datetime.utcnow()
             scan.logs += f"[System Error] Scan failed due to: {e}\n"
             db.commit()
     finally:
         db.close()
 
-def save_tool_result(db, scan_id: int, tool_name: str, result: dict):
+def save_tool_result(db, scan_id: int, tool_name: str, result: dict, simulated: bool = False):
+    raw_output = result.get("log", "")
+    if simulated:
+        raw_output = (
+            "[SIMULATED] Tool output is synthetic (SIMULATION_MODE). "
+            "This is NOT the result of a real security assessment.\n" + raw_output
+        )
     tool_result = ToolResult(
         scan_id=scan_id,
         tool_name=tool_name,
         status="Completed" if result.get("status") == "success" else "Failed",
-        raw_output=result.get("log", "")
+        raw_output=raw_output
     )
     db.add(tool_result)
     db.commit()

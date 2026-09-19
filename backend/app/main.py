@@ -1,9 +1,7 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from database.connection import init_db
+from database.connection import verify_schema, seed_defaults
+from app.config import settings
 from app.api import scans, chat, reports, auth
 
 app = FastAPI(
@@ -12,19 +10,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for frontend cross-origin requests
+# CORS is configuration-driven. No wildcard is combined with credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Startup DB initialization
+# Startup DB verification and seeding.
+# The application assumes the database has already been migrated
+# (alembic upgrade head). verify_schema fails loudly if tables are missing.
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    verify_schema()
+    seed_defaults()
 
 # Include endpoints
 app.include_router(auth.router)
@@ -38,8 +39,6 @@ def read_root():
         "status": "online",
         "app": "CyberAgent",
         "tagline": "Autonomous AI Security Copilot",
-        "docs": "/docs"
+        "docs": "/docs",
+        "simulation_mode": settings.simulation_mode
     }
-
-
-

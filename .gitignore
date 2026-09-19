@@ -2,12 +2,16 @@
 .env
 .env.local
 .env.*
+!**/.env.example
 **/.*env
 **/.env
 
 # Databases
 *.db
 backend/cyberagent.db
+
+# Test artifacts
+.pytest_cache/
 
 # Frontend Dependencies & Build
 frontend/node_modules/

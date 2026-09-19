@@ -1,0 +1,11 @@
+# Runtime dependencies for the CyberAgent backend.
+# Versions are pinned to the exact set verified in the project virtualenv.
+fastapi==0.141.1
+uvicorn==0.53.0
+SQLAlchemy==2.0.54
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# Database schema management (Alembic) - required to run `alembic upgrade head`
+# before application startup.
+alembic==1.20.0

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Send, Bot, User, Terminal, HelpCircle } from 'lucide-react';
+import { API_URL } from '../api';
 
 export const AIChat: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
@@ -12,7 +13,7 @@ export const AIChat: React.FC = () => {
 
   const fetchScans = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8001/scans/list');
+      const res = await fetch(`${API_URL}/scans/list`);
       if (res.ok) {
         const data = await res.json();
         setScans(data);
@@ -30,7 +31,7 @@ export const AIChat: React.FC = () => {
 
   const fetchChatHistory = async (scanId: number) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8001/chat/history/${scanId}`);
+      const res = await fetch(`${API_URL}/chat/history/${scanId}`);
       if (res.ok) {
         const data = await res.json();
         setMessages(data);
@@ -57,7 +58,7 @@ export const AIChat: React.FC = () => {
     setLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8001/chat/query', {
+      const res = await fetch(`${API_URL}/chat/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scan_id: selectedScanId, message: userMsg })

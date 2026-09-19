@@ -8,6 +8,7 @@ from database.connection import get_db
 from database.models import Scan, Project, Vulnerability, ToolResult
 from database.schemas import ScanRequest
 from app.workers.tasks import trigger_background_scan
+from app.config import settings
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -29,13 +30,16 @@ def trigger_scan(payload: ScanRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_scan)
 
-    # Launch scanning asynchronously (simulated by default)
-    trigger_background_scan(new_scan.id, simulation=True)
+    # Launch scanning asynchronously. The simulation flag is driven by the
+    # SIMULATION_MODE configuration boundary, never hardcoded here.
+    simulation = settings.simulation_mode
+    trigger_background_scan(new_scan.id, simulation=simulation)
 
     return {
         "scan_id": new_scan.id,
         "target": new_scan.target,
         "status": new_scan.status,
+        "simulation": simulation,
         "created_at": new_scan.created_at
     }
 
