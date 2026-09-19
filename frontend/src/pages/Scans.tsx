@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldAlert, AlertTriangle, Info, ShieldCheck, ChevronDown, ChevronUp, FileText, MessageSquare, Terminal } from 'lucide-react';
+import { API_URL } from '../api';
 
 export const Scans: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
@@ -12,7 +13,7 @@ export const Scans: React.FC = () => {
 
   const fetchScans = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8001/scans/list');
+      const res = await fetch(`${API_URL}/scans/list`);
       if (res.ok) {
         const data = await res.json();
         setScans(data);
@@ -31,7 +32,7 @@ export const Scans: React.FC = () => {
   const handleSelectScan = async (id: number) => {
     setDetailsLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8001/scans/${id}/details`);
+      const res = await fetch(`${API_URL}/scans/${id}/details`);
       if (res.ok) {
         const data = await res.json();
         setSelectedScan(data);

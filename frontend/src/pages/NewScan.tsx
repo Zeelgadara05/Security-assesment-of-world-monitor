@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ShieldAlert, Play, Terminal, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { API_URL } from '../api';
 
 export const NewScan: React.FC = () => {
   const [target, setTarget] = useState('');
@@ -27,7 +28,7 @@ export const NewScan: React.FC = () => {
     setScore(null);
 
     try {
-      const res = await fetch('http://127.0.0.1:8001/scans/trigger', {
+      const res = await fetch(`${API_URL}/scans/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target: target.trim() })
@@ -53,7 +54,7 @@ export const NewScan: React.FC = () => {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`http://127.0.0.1:8001/scans/${id}/stream`);
+    const es = new EventSource(`${API_URL}/scans/${id}/stream`);
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {

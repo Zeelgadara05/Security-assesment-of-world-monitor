@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Download, Eye, Sparkles } from 'lucide-react';
 import MonacoEditor from '@monaco-editor/react';
+import { API_URL } from '../api';
 
 export const Reports: React.FC = () => {
   const [reports, setReports] = useState<any[]>([]);
@@ -11,7 +12,7 @@ export const Reports: React.FC = () => {
 
   const fetchReports = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8001/reports/list');
+      const res = await fetch(`${API_URL}/reports/list`);
       if (res.ok) {
         const data = await res.json();
         setReports(data);
@@ -29,7 +30,7 @@ export const Reports: React.FC = () => {
   const handleSelectReport = async (scanId: number, reqFormat: 'markdown' | 'json' | 'html') => {
     setFormat(reqFormat);
     try {
-      const res = await fetch(`http://127.0.0.1:8001/reports/${scanId}/${reqFormat}`);
+      const res = await fetch(`${API_URL}/reports/${scanId}/${reqFormat}`);
       if (res.ok) {
         const selected = reports.find(r => r.scan_id === scanId);
         setSelectedReport(selected || { scan_id: scanId, title: `Report for Scan #${scanId}` });
@@ -159,14 +160,14 @@ export const Reports: React.FC = () => {
           {selectedReport && (
             <div className="flex justify-end gap-2 flex-shrink-0">
               <a
-                href={`http://127.0.0.1:8001/reports/${selectedReport.scan_id}/pdf`}
+                href={`${API_URL}/reports/${selectedReport.scan_id}/pdf`}
                 className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export PDF</span>
               </a>
               <a
-                href={`http://127.0.0.1:8001/reports/${selectedReport.scan_id}/markdown`}
+                href={`${API_URL}/reports/${selectedReport.scan_id}/markdown`}
                 download={`cyberagent_report_${selectedReport.scan_id}.md`}
                 className="bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 font-semibold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
               >
