@@ -5,6 +5,11 @@
 **Mode:** Read-only audit. No production code modified. No tests created.
 **Committer baseline:** single commit `f874173` ("Initial commit"); working tree had pre-existing local changes (see §5).
 
+> **Phase 1 note (2026-09-19):** This document records the Phase 0 baseline and was
+> written before Phase 1 (stabilization) modified the repository. Statements that
+> Phase 1 has since resolved are marked **[PH1 DONE]** below and summarized in §11.
+> See `docs/PHASE_1_IMPLEMENTATION.md` for the full Phase 1 record.
+
 ---
 
 ## 1. Scope, method and honesty note
@@ -348,3 +353,27 @@ Phase 5 — Quality gates
 - No files, APIs, tables, or behaviors are claimed beyond what was found in code.
 - No production code was modified and no dependencies were added during this audit.
 - The working tree already contained uncommitted changes (frontend `8000→127.0.0.1:8001` URL fixes and `package-lock.json` resolution churn from prior work); these pre-date this audit phase and are unrelated to it.
+
+---
+
+## 11. Phase 1 addendum (stabilization — completed 2026-09-19)
+
+Phase 1 (see `docs/PHASE_1_IMPLEMENTATION.md`) executed the "Phase 0" stabilization
+recommendations from §9 and several "Phase 1" items. Status per finding:
+
+| Audit finding | Phase 1 disposition |
+|---|---|
+| §5.1 CORS `*` + `allow_credentials=True` | **[PH1 DONE]** CORS is now config-driven (`CORS_ORIGINS`), `allow_credentials=False`, in `app/main.py`; covered by `tests/test_root_cors.py`. |
+| §5.1 no settings bundle | **[PH1 DONE]** `backend/app/config.py` `Settings` (DATABASE_URL, SIMULATION_MODE, CORS_ORIGINS, REDIS_URL). |
+| §5.2 no Alembic migrations | **[PH1 DONE]** `backend/alembic/` initial migration `d1c4eef2b66c`; dev DB stamped; `verify_schema()` fails loudly on unmigrated DB and never creates tables. |
+| §5.2 `completed_at` never written | **[PH1 DONE]** populated in both Completed and Failed paths (`workflow.py`); asserted by `tests/test_scan_lifecycle.py`. |
+| §5.4 simulation flag hardcoded at trigger | **[PH1 DONE]** trigger reads `settings.simulation_mode`; response reports `simulation`; simulation-moded output is marked `[SIMULATION]`/`[SIMULATED]` (`workflow.py` + tests). |
+| §5.7 / §5.9 mock auth & fake Settings UI | **NOT in Phase 1 scope** (explicitly deferred; still open). |
+| §5.9 hardcoded fetch base URLs | **[PH1 DONE]** centralized in `frontend/src/api.ts` via `VITE_API_URL`; dead Vite templates (`main.ts`, `counter.ts`, `style.css`, unused `assets/`, `public/icons.svg`) removed. |
+| §5.10 no requirements.txt / .env.example | **[PH1 DONE]** `backend/requirements.txt`, `backend/requirements-dev.txt`, `backend/.env.example`, `frontend/.env.example`; `.gitignore` un-ignores `*.env.example`. |
+| §5.12 no tests | **[PH1 DONE]** pytest suite (28 tests) with isolated temp SQLite DB (never touches `cyberagent.db`), migration-backed fixtures. |
+| §5.13 README overstates readiness | **[PH1 DONE]** README rewritten: implemented vs planned split, accurate port/venv/setup. |
+| §7 gap 1 (create_all only) | **[PH1 DONE]** replaced by Alembic; startup no longer calls `create_all`. |
+| §9 Phase 0 items 1–4 | All four completed (config bundle, requirements/env, migrations, dead files). |
+| §9 Phase 1 items 6–7 | Item 6 (completed_at) and item 7 (frontend API client) completed. Item 5 (real scanners behind `SIMULATION_MODE`) intentionally **NOT** done — out of Phase 1 scope. |
+| No Docker, no CI, no real auth/RBAC, no LLM/RAG, no World Monitor collectors, fake PDF | **NOT in Phase 1 scope.** Phases 2–5 remain open. |
