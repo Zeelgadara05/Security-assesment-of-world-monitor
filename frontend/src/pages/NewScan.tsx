@@ -27,7 +27,7 @@ export const NewScan: React.FC = () => {
     setScore(null);
 
     try {
-      const res = await fetch('http://localhost:8000/scans/trigger', {
+      const res = await fetch('http://127.0.0.1:8001/scans/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target: target.trim() })
@@ -53,7 +53,7 @@ export const NewScan: React.FC = () => {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`http://localhost:8000/scans/${id}/stream`);
+    const es = new EventSource(`http://127.0.0.1:8001/scans/${id}/stream`);
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {

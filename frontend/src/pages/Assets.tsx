@@ -12,7 +12,7 @@ export const Assets: React.FC = () => {
 
   const fetchAssets = async () => {
     try {
-      const res = await fetch('http://localhost:8000/auth/assets');
+      const res = await fetch('http://127.0.0.1:8001/auth/assets');
       if (res.ok) {
         const data = await res.json();
         setAssets(data);

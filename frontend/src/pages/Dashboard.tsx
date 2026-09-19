@@ -8,7 +8,7 @@ export const Dashboard: React.FC = () => {
 
   const fetchScans = async () => {
     try {
-      const res = await fetch('http://localhost:8000/scans/list');
+      const res = await fetch('http://127.0.0.1:8001/scans/list');
       if (res.ok) {
         const data = await res.json();
         setScans(data);

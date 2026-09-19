@@ -12,7 +12,7 @@ export const Scans: React.FC = () => {
 
   const fetchScans = async () => {
     try {
-      const res = await fetch('http://localhost:8000/scans/list');
+      const res = await fetch('http://127.0.0.1:8001/scans/list');
       if (res.ok) {
         const data = await res.json();
         setScans(data);
@@ -31,7 +31,7 @@ export const Scans: React.FC = () => {
   const handleSelectScan = async (id: number) => {
     setDetailsLoading(true);
     try {
-      const res = await fetch(`http://localhost:8000/scans/${id}/details`);
+      const res = await fetch(`http://127.0.0.1:8001/scans/${id}/details`);
       if (res.ok) {
         const data = await res.json();
         setSelectedScan(data);
