@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, ArrowRight, ShieldCheck, ScanSearch, AlertCircle } from 'lucide-react';
+import { Lock, ArrowRight, ShieldCheck, ScanSearch, AlertCircle } from 'lucide-react';
 import { apiFetch, setToken } from '../api';
 import { Input } from '../components/Field';
 import { Button } from '../components/Button';

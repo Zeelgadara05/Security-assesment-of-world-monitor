@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, UserRound, MessageSquareText, Sparkles, Bot } from 'lucide-react';
 import { apiFetch } from '../api';
 import { PageHeader } from '../components/PageHeader';
-import { LoaderBlock } from '../components/ErrorState';
 
 interface Message {
   role: string;

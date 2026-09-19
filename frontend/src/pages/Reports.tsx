@@ -135,7 +135,7 @@ export const Reports: React.FC = () => {
               </div>
               {selected && (
                 <div className="flex items-center gap-2">
-                  <Select label="" value={format} onChange={(e) => selectedScanId && loadContent(selectedScanId, e.target.value as Format)} className="!py-1.5 !text-[11px]">
+                  <Select value={format} onChange={(e) => selectedScanId && loadContent(selectedScanId, e.target.value as Format)} className="!py-1.5 !text-[11px]">
                     <option value="markdown">Markdown</option>
                     <option value="json">JSON</option>
                     <option value="html">HTML</option>
