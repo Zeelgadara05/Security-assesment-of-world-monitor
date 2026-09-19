@@ -366,45 +366,15 @@ class NucleiAdapter(ScannerAdapter):
 
     def simulate(self, target, sanitized):
         time.sleep(4)
-        vulnerabilities = [
-            {
-                "title": "SQL Injection in Admin Search Parameter",
-                "severity": "Critical",
-                "cve": "CVE-2024-3849",
-                "cvss": 9.8,
-                "owasp": "A03:2021-Injection",
-                "mitre": "T1190 - Exploit Public-Facing Application",
-                "description": "A SQL injection vulnerability exists in the admin search page due to improper sanitation of user inputs.",
-                "remediation": "Use parameterized queries and bind variables in all database search APIs.",
-                "proof_of_concept": f"GET /admin/search?q=1'+OR+'1'='1' HTTP/1.1\nHost: {sanitized}\n\nResponse:\nHTTP/1.1 200 OK\n[Contains complete user table data]",
-            },
-            {
-                "title": "Missing Content-Security-Policy (CSP) Header",
-                "severity": "Low",
-                "cve": None,
-                "cvss": 3.1,
-                "owasp": "A05:2021-Security Misconfiguration",
-                "mitre": "T1566 - Phishing / XSS Delivery",
-                "description": "Content-Security-Policy header is missing on the client side login shell.",
-                "remediation": "Add Content-Security-Policy HTTP response headers to control loaded source scripts.",
-                "proof_of_concept": f"GET /login HTTP/1.1\nHost: {sanitized}\n\nResponse Headers:\nHTTP/1.1 200 OK\nServer: nginx\n(No Content-Security-Policy header present)",
-            },
-            {
-                "title": "Outdated jQuery Version (1.12.4) with Vulnerability",
-                "severity": "Medium",
-                "cve": "CVE-2015-9251",
-                "cvss": 6.1,
-                "owasp": "A06:2021-Vulnerable and Outdated Components",
-                "mitre": "T1203 - Exploitation for Client Execution",
-                "description": "The client application uses jQuery 1.12.4, which is susceptible to cross-site scripting attacks via remote links.",
-                "remediation": "Upgrade jQuery dependency to the latest supported version (3.7.1 or higher).",
-                "proof_of_concept": f"Detected in resource bundle: /js/jquery-1.12.4.min.js",
-            },
-        ]
-        log = "[nuclei] Scan started against " + sanitized + "\n"
-        for v in vulnerabilities:
-            log += f"[{v['severity']}] [{v['cve'] or 'unknown'}] [{v['owasp']}] -> {v['title']}\n"
-        return {"tool": self.tool_name, "status": "success", "vulnerabilities": vulnerabilities, "log": log}
+        # Simulation NEVER fabricates security findings. Findings are derived
+        # exclusively from real tool output normalized into persisted
+        # observations; a simulated run has none, so it produces none.
+        log = (
+            f"[nuclei] [SIMULATION] No vulnerability findings were synthesized. "
+            f"Findings require real engine output plus persisted evidence.\n"
+            f"[nuclei] Scan started against {sanitized} (simulated)\n"
+        )
+        return {"tool": self.tool_name, "status": "success", "vulnerabilities": [], "log": log}
 
     def run_real(self, target, sanitized):
         # JSON output mode: every line is a self-contained finding record from
@@ -439,6 +409,9 @@ class NucleiAdapter(ScannerAdapter):
                 "description": info.get("description") or "Nuclei-generated finding.",
                 "remediation": info.get("remediation") or "Apply the relevant security patch or configuration fix.",
                 "proof_of_concept": f"{record.get('matched-at', target)} {record.get('matcher-name', '')}".strip(),
+                "matched_at": record.get("matched-at") or target,
+                "template_id": record.get("template-id"),
+                "matcher_name": record.get("matcher-name"),
             })
         return {"tool": self.tool_name, "status": "success", "vulnerabilities": vulnerabilities, "log": result.stdout}
 

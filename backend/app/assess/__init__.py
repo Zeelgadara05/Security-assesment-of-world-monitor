@@ -1,0 +1,1 @@
+"""Findings engine (Phase 3): deterministic rules + scoring over observations."""

@@ -13,6 +13,67 @@ class ChatPayload(BaseModel):
     message: str
 
 
+def _finding_haystack(v: Vulnerability) -> str:
+    return " ".join(str(x) for x in [
+        v.title, v.description, v.remediation, v.cve, v.rule_id, v.owasp, v.cwe,
+    ]).lower()
+
+
+def _compile_response(scan: Scan, vulns: list, message: str) -> str:
+    """Deterministic, data-driven assistant. Compiled exclusively from the
+    PERSISTED findings of the scan; it never cites invented vulnerabilities."""
+    msg_lower = message.lower()
+    has_findings = bool(vulns)
+
+    if "remediation" in msg_lower or "fix" in msg_lower or "action" in msg_lower:
+        if not has_findings:
+            return (
+                f"Target **{scan.target}** has no evidence-backed findings on "
+                "record. There is nothing to remediate from persisted findings."
+            )
+        lines = [
+            f"Based on the persisted findings for target **{scan.target}** "
+            f"({len(vulns)} issue(s)):\n"
+        ]
+        for i, v in enumerate(vulns, 1):
+            lines.append(
+                f"{i}. **{v.title}** ({v.severity}, state={v.state or 'NEW'}): "
+                f"{v.remediation or 'No remediation provided.'}"
+            )
+        return "\n".join(lines)
+
+    # Security-header / component keywords -> findings that actually mention them.
+    keywords = [
+        "csp", "content-security-policy", "hsts", "strict-transport-security",
+        "x-content-type-options", "x-frame-options", "server version", "banner",
+        "jquery", "outdated", "nuclei", "cve", "header", "injection",
+    ]
+    hits = [v for v in vulns if any(k in msg_lower and k in _finding_haystack(v) for k in keywords)]
+    if hits:
+        answers = []
+        for v in hits[:5]:
+            answers.append(
+                f"**{v.title}** ({v.severity}, state={v.state or 'NEW'}, rule={v.rule_id or 'legacy'})\n"
+                f"{v.description}\nRemediation: {v.remediation or 'None provided.'}"
+            )
+        return "\n\n".join(answers)
+    if msg_lower and any(k in msg_lower for k in keywords) and not hits:
+        return (
+            f"No persisted finding for target **{scan.target}** matches the "
+            "keyword in your request. Only evidence-backed findings are reported."
+        )
+
+    context = "\n".join(
+        f"- {v.title} ({v.severity}) [state={v.state or 'NEW'}]: {v.remediation or 'No remediation provided.'}"
+        for v in vulns
+    ) or "No evidence-backed findings are persisted for this target."
+    return (
+        f"Greetings. I am the CyberAgent assistant, reviewing **persisted** "
+        f"findings for target **{scan.target}**.\n\nVulnerability Context Summary:\n{context}\n\n"
+        "Ask about remediation, a specific finding, or a security header."
+    )
+
+
 @router.post("/query")
 def submit_chat_query(
     payload: ChatPayload,
@@ -21,79 +82,20 @@ def submit_chat_query(
 ):
     """
     Submits a user chat query to the AI Security Copilot.
-    Uses target vulnerabilities and context memory to provide specialized remediation instructions.
-    The referenced scan must belong to the authenticated user.
+
+    The referenced scan must belong to the authenticated user.  The assistant is
+    a deterministic, keyword-assisted simulator (no LLM): replies are compiled
+    exclusively from the scan's PERSISTED findings and are never fabricated.
     """
     scan = get_owned_scan(db, user, payload.scan_id)
 
-    # Save user message to history
     user_chat = ChatHistory(scan_id=payload.scan_id, role="user", message=payload.message)
     db.add(user_chat)
     db.commit()
 
-    # Get scan details and vulnerabilities as core prompt context
     vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == payload.scan_id).all()
-    vuln_context = "\n".join([
-        f"- {v.title} ({v.severity}): CVE={v.cve or 'None'}, CVSS={v.cvss or 'N/A'}, OWASP={v.owasp or 'N/A'}"
-        for v in vulns
-    ])
+    response = _compile_response(scan, vulns, payload.message)
 
-    # Simple smart logic fallback rules acting as AI Security Specialist.
-    # This is a deterministic, keyword-driven SIMULATED assistant, not an LLM.
-    msg_lower = payload.message.lower()
-
-    if "sql injection" in msg_lower or "cve-2024-3849" in msg_lower:
-        response = (
-            "The **SQL Injection (CVE-2024-3849)** finding represents a **Critical** security risk (CVSS 9.8). "
-            "It was detected in the search queries of the target application. "
-            "### Remediation Steps:\n"
-            "1. **Use Parameterized Queries**: Ensure your database adapter uses prepared statements.\n"
-            "   ```python\n"
-            "   # SECURE IMPLEMENTATION\n"
-            "   cursor.execute(\"SELECT * FROM users WHERE name = %s\", (user_input,))\n"
-            "   ```\n"
-            "2. **Implement Input Validation**: Define strict schemas using frameworks like Pydantic.\n"
-            "3. **Minimize SQL Database Privileges**: Restrict the web server user's db access."
-        )
-    elif "csp" in msg_lower or "content-security-policy" in msg_lower:
-        response = (
-            "The **Missing Content-Security-Policy (CSP)** finding is a **Low** severity risk. "
-            "It makes your web application vulnerable to Cross-Site Scripting (XSS) and Clickjacking attacks. "
-            "### Recommended CSP Header configuration:\n"
-            "```http\n"
-            "Content-Security-Policy: default-src 'self'; script-src 'self' https://trustedscripts.com; style-src 'self' 'unsafe-inline';\n"
-            "```\n"
-            "Add this header dynamically inside your Nginx configurations or backend application middleware."
-        )
-    elif "cve-2015-9251" in msg_lower or "jquery" in msg_lower:
-        response = (
-            "The **Outdated jQuery Version (1.12.4)** finding maps to **CVE-2015-9251** (Medium Severity, CVSS 6.1). "
-            "This package contains cross-site scripting flaws when parsed against remote elements.\n"
-            "### Remediation Plan:\n"
-            "Upgrade your front-end configuration bundle dependencies:\n"
-            "```bash\n"
-            "npm install jquery@3.7.1\n"
-            "```"
-        )
-    elif "remediation" in msg_lower or "fix" in msg_lower or "action" in msg_lower:
-        response = (
-            f"Based on the scanning findings for target **{scan.target}**, you have {len(vulns)} issues:\n\n"
-            "**Priority 1: SQL Injection (Critical)**\n"
-            "Action: Refactor the query builder into parameterized calls immediately. This accounts for a CVSS of 9.8.\n\n"
-            "**Priority 2: Outdated jQuery Component (Medium)**\n"
-            "Action: Upgrade standard build dependencies to version 3.7.1.\n\n"
-            "**Priority 3: Missing CSP (Low)**\n"
-            "Action: Inject modern Content-Security-Policy HTTP headers inside reverse proxy config."
-        )
-    else:
-        # Default response compiled based on scanner findings context
-        response = (
-            f"Greetings. I am CyberAgent AI copilot. I am reviewing scan findings for target **{scan.target}**.\n\n"
-            f"Vulnerability Context Summary:\n{vuln_context or 'No vulnerabilities detected for this sandbox scan target.'}\n\n"
-            "Please ask me details about any vulnerability, remediation steps, or ask for general code patches!"
-        )
-
-    # Save assistant response to history (SIMULATED assistant output)
     assistant_chat = ChatHistory(scan_id=payload.scan_id, role="assistant", message=response)
     db.add(assistant_chat)
     db.commit()

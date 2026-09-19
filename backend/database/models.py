@@ -74,6 +74,7 @@ class Scan(Base):
     project = relationship("Project", back_populates="scans")
     tool_results = relationship("ToolResult", back_populates="scan", cascade="all, delete-orphan")
     vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")
+    observations = relationship("Observation", back_populates="scan", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="scan", cascade="all, delete-orphan")
     chats = relationship("ChatHistory", back_populates="scan", cascade="all, delete-orphan")
 
@@ -92,6 +93,14 @@ class ToolResult(Base):
 
 
 class Vulnerability(Base):
+    """A persisted security finding.
+
+    Phase 3: a finding is never fabricated.  Every finding carries a rule_id,
+    a triage state, and the evidence trail (human-readable ``evidence`` text
+    plus the ids of the persisted ``Observation`` rows it was derived from).
+    The chain finding -> evidence -> observation -> tool -> scan -> authorized
+    target is therefore fully traceable in the database.
+    """
     __tablename__ = "vulnerabilities"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -104,11 +113,46 @@ class Vulnerability(Base):
     cvss = Column(Float, nullable=True)
     owasp = Column(String(100), nullable=True)
     mitre = Column(String(100), nullable=True)
+    cwe = Column(String(100), nullable=True)
     target = Column(String(255), nullable=True)  # URL/IP where it was found
     proof_of_concept = Column(Text, nullable=True)
+    rule_id = Column(String(100), nullable=True)  # deterministic rule that produced this finding
+    dedup_key = Column(String(255), nullable=True)  # stable identity used for duplicate suppression
+    confidence = Column(String(20), nullable=True)  # "intermediate" | "confirmed"
+    state = Column(String(50), nullable=False, default="NEW")  # NEW/CONFIRMED/FALSE_POSITIVE/DUPLICATE/ACCEPTED_RISK/RESOLVED
+    evidence = Column(Text, nullable=True)  # human-readable support trail for the finding
+    evidence_observation_ids = Column(JSON, nullable=True)  # ids of supporting Observation rows
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
 
     scan = relationship("Scan", back_populates="vulnerabilities")
+
+
+class Observation(Base):
+    """A single, plugin-faithful factual observation captured by a real tool.
+
+    Observations are the only accepted source of evidence in Phase 3: findings
+    are derived exclusively from rows here.  ``kind`` names what was measured
+    (e.g. ``dns_record``, ``tcp_connect``, ``http_response``), ``subject`` is
+    the host/endpoint it measured, ``data_json`` holds the structured facts and
+    ``raw_output`` the verbatim evidence snippet (response headers, resolved IP,
+    DNS error, ...).  A probe that could not complete is recorded as an
+    observation too (e.g. ``dns_error``, ``http_error``) so "nothing to report"
+    is itself evidenced rather than silently dropped.
+    """
+    __tablename__ = "observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    tool_name = Column(String(50), nullable=False)  # which real tool/probe captured it
+    kind = Column(String(50), nullable=False)
+    subject = Column(String(255), nullable=False)  # host / endpoint the fact concerns
+    data_json = Column(JSON, default=dict)
+    raw_output = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="observations")
 
 
 class Report(Base):

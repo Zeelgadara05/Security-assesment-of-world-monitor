@@ -5,59 +5,60 @@ import { apiFetch } from '../api';
 
 export const Dashboard: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchScans = async () => {
+  const fetchData = async () => {
     try {
-      const res = await apiFetch('/scans/list');
-      if (res.ok) {
-        const data = await res.json();
-        setScans(data);
+      const [scanRes, summaryRes] = await Promise.all([
+        apiFetch('/scans/list'),
+        apiFetch('/scans/summary'),
+      ]);
+      if (scanRes.ok) {
+        setScans(await scanRes.json());
+      }
+      if (summaryRes.ok) {
+        setSummary(await summaryRes.json());
       }
     } catch (err) {
-      console.error('Error fetching scans:', err);
+      console.error('Error fetching dashboard data:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchScans();
-    const interval = setInterval(fetchScans, 5000);
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
   // Compute metrics based on scans
   const activeScans = scans.filter((s) => s.status === 'Running').length;
   const completedScans = scans.filter((s) => s.status === 'Completed').length;
-  const averageScore = scans.length > 0
-    ? Math.round(scans.reduce((acc, s) => acc + (s.security_score || 100), 0) / scans.length)
-    : 100;
+  const averageScore = (summary?.score_history?.length ?? 0) > 0
+    ? Math.round(summary.score_history.reduce((acc: number, s: any) => acc + (s.score ?? 100), 0) / summary.score_history.length)
+    : null;
+  const openFindings = summary?.open_findings ?? 0;
 
-  // Static/Demo analytical dataset for visualization
-  const trendData = [
-    { name: 'Scan #1', score: 85 },
-    { name: 'Scan #2', score: 90 },
-    { name: 'Scan #3', score: 72 },
-    { name: 'Scan #4', score: 98 },
-    { name: 'Scan #5', score: 88 },
-    { name: 'Scan #6', score: averageScore },
-  ];
+  // Real analytical data, derived from persisted findings/assets
+  const trendData = (summary?.score_history ?? []).map((s: any) => ({
+    name: s.target,
+    score: s.score ?? 100,
+  }));
 
-  const severityPieData = [
-    { name: 'Critical', value: 1, color: '#ef4444' },
-    { name: 'High', value: 2, color: '#f97316' },
-    { name: 'Medium', value: 4, color: '#eab308' },
-    { name: 'Low', value: 3, color: '#3b82f6' },
-  ];
+  const severityColors: Record<string, string> = {
+    Critical: '#ef4444',
+    High: '#f97316',
+    Medium: '#eab308',
+    Low: '#3b82f6',
+    Info: '#64748b',
+  };
+  const severityPieData = (Object.entries(summary?.severity_distribution ?? {}) as [string, number][])
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => ({ name, value: count, color: severityColors[name] ?? '#64748b' }));
 
-  const portsData = [
-    { name: 'Port 80', count: 12 },
-    { name: 'Port 443', count: 15 },
-    { name: 'Port 22', count: 3 },
-    { name: 'Port 8080', count: 5 },
-    { name: 'Port 3000', count: 2 },
-  ];
+  const portsData = (summary?.open_ports ?? []).map((p: string) => ({ name: p, count: 1 }));
 
   return (
     <div className="space-y-6">
@@ -68,7 +69,7 @@ export const Dashboard: React.FC = () => {
           <p className="text-slate-400 text-sm">Security posture and active scan operations monitor.</p>
         </div>
         <button
-          onClick={fetchScans}
+          onClick={fetchData}
           className="flex items-center gap-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors text-slate-300"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -84,7 +85,7 @@ export const Dashboard: React.FC = () => {
             <Award className="w-5 h-5 text-emerald-500" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">{averageScore}</span>
+            <span className="text-4xl font-extrabold text-white">{averageScore ?? '--'}</span>
             <span className="text-xs text-slate-500">/100 avg</span>
           </div>
         </div>
@@ -113,12 +114,12 @@ export const Dashboard: React.FC = () => {
 
         <div className="glass-card p-5 flex flex-col justify-between h-32">
           <div className="flex justify-between items-start">
-            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Known Vulnerabilities</span>
+            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Open Findings</span>
             <ShieldAlert className="w-5 h-5 text-red-500" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-4xl font-extrabold text-white">10</span>
-            <span className="text-xs text-red-400 font-medium">Critical/High focus</span>
+            <span className="text-4xl font-extrabold text-white">{openFindings}</span>
+            <span className="text-xs text-red-400 font-medium">evidence-backed</span>
           </div>
         </div>
       </div>
@@ -132,6 +133,9 @@ export const Dashboard: React.FC = () => {
             <p className="text-slate-500 text-xs">Timeline of security rating across scans.</p>
           </div>
           <div className="h-64 w-full">
+            {trendData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-500 text-sm">No scan history yet.</div>
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={trendData}>
                 <defs>
@@ -146,6 +150,7 @@ export const Dashboard: React.FC = () => {
                 <Area type="monotone" dataKey="score" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorScore)" />
               </AreaChart>
             </ResponsiveContainer>
+            )}
           </div>
         </div>
 
@@ -156,6 +161,9 @@ export const Dashboard: React.FC = () => {
             <p className="text-slate-500 text-xs">Active vulnerability findings breakdown.</p>
           </div>
           <div className="h-48 flex justify-center items-center">
+            {severityPieData.length === 0 ? (
+              <div className="text-slate-500 text-sm">No open findings.</div>
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -174,6 +182,7 @@ export const Dashboard: React.FC = () => {
                 <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }} />
               </PieChart>
             </ResponsiveContainer>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-2 text-xs">
             {severityPieData.map((item) => (
@@ -195,6 +204,9 @@ export const Dashboard: React.FC = () => {
             <p className="text-slate-500 text-xs">Frequency of network ports found listening.</p>
           </div>
           <div className="h-64 w-full">
+            {portsData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-500 text-sm">No open ports discovered.</div>
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={portsData}>
                 <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} />
@@ -203,6 +215,7 @@ export const Dashboard: React.FC = () => {
                 <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+            )}
           </div>
         </div>
 

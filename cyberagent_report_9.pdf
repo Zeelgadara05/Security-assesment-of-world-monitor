@@ -1,0 +1,37 @@
+# Security Assessment Report
+
+**Target**: `tech.worldmonitor.app`
+**Date**: 2026-09-19 11:40:08 UTC
+**Security Score**: `100/100`
+**Status**: `COMPLETED`
+**Mode**: `REAL - evidence-backed findings`
+
+---
+
+## Executive Summary
+
+This report summarizes the security assessment conducted on target network `tech.worldmonitor.app`. Findings are derived exclusively from persisted observations; a finding with no evidence is never reported.
+
+We identified **0 finding(s)**. Review the list below for direct mitigation techniques.
+
+---
+
+## Findings
+
+No evidence-backed findings were produced for this scan.
+
+## Evidence & Methodology (persisted observations)
+
+* `dns_record` by real_dns on tech.worldmonitor.app
+* `dns_record` by real_dns on tech.worldmonitor.app
+* `dns_record` by real_dns on tech.worldmonitor.app
+* `tcp_timeout` by real_tcp on tech.worldmonitor.app
+* `tcp_open` by real_tcp on tech.worldmonitor.app
+* `tcp_open` by real_tcp on tech.worldmonitor.app
+* `tcp_timeout` by real_tcp on tech.worldmonitor.app
+* `tcp_timeout` by real_tcp on tech.worldmonitor.app
+* `tcp_timeout` by real_tcp on tech.worldmonitor.app
+* `tcp_open` by real_tcp on tech.worldmonitor.app
+* `tcp_open` by real_tcp on tech.worldmonitor.app
+* `http_response` by real_http on https://tech.worldmonitor.app
+* `http_response` by real_http on http://tech.worldmonitor.app
