@@ -62,3 +62,62 @@ def session():
     s = SessionLocal()
     yield s
     s.close()
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers for Phase 2 tests.  Every resource endpoint now requires an
+# authenticated session, so tests build real users through the public API to
+# avoid coupling test logic to a hardcoded identity.
+# ---------------------------------------------------------------------------
+def register_user(client, email, password="StrongPass123!"):
+    resp = client.post("/auth/register", json={"email": email, "password": password})
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def login_user(client, email, password="StrongPass123!"):
+    resp = client.post("/auth/login", json={"email": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    return {"Authorization": f"Bearer {data['token']}"}
+
+
+@pytest.fixture(scope="session")
+def auth_headers(client):
+    email = "owner@test.local"
+    register_user(client, email)
+    return login_user(client, email)
+
+
+@pytest.fixture(scope="session")
+def other_auth_headers(client):
+    email = "other@test.local"
+    register_user(client, email)
+    return login_user(client, email)
+
+
+@pytest.fixture(scope="session")
+def admin_headers(client):
+    """Admin created via the config-driven bootstrap path, exercised in-process."""
+    from app.core.security import hash_password
+    from database.connection import SessionLocal
+    from database.models import User
+
+    email = "admin@test.local"
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.email == email).first()
+        if admin is None:
+            admin = User(id="admin-admin@test.local", email=email,
+                         password_hash=hash_password("AdminPass123!"), role="admin")
+            db.add(admin)
+            db.commit()
+    finally:
+        db.close()
+    return login_user(client, email, "AdminPass123!")
+
+
+def add_scope(client, headers, target):
+    resp = client.post("/scans/scope", json={"target": target}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    return resp.json()

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, Mail, UserPlus, ArrowRight, AlertCircle } from 'lucide-react';
+import { apiFetch, setToken } from '../api';
 
 interface AuthProps {
   onLoginSuccess: () => void;
@@ -12,18 +13,49 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password.trim()) return;
 
     setLoading(true);
     setError('');
 
-    // Simulate Supabase authentication delay
-    setTimeout(() => {
-      setLoading(false);
+    const path = isSignUp ? '/auth/register' : '/auth/login';
+    const options = {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim(), password }),
+    };
+
+    try {
+      const res = await apiFetch(path, options);
+
+      if (res.status === 401 || res.status === 403 || res.status === 409) {
+        const errData = await res.json().catch(() => null);
+        setError(errData?.detail || 'Authentication failed. Check your credentials.');
+        setLoading(false);
+        return;
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        setError(errData?.detail || 'Request failed. Ensure the backend server is running.');
+        setLoading(false);
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.token) {
+        setError('The server did not return a session token.');
+        setLoading(false);
+        return;
+      }
+
+      setToken(data.token);
       onLoginSuccess();
-    }, 1200);
+    } catch (err) {
+      setError('Cannot reach the backend server. Is uvicorn running on 127.0.0.1:8001?');
+      setLoading(false);
+    }
   };
 
   return (
@@ -67,7 +99,8 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
               <input
                 type="password"
                 required
-                placeholder="••••••••••••"
+                minLength={8}
+                placeholder={isSignUp ? 'At least 8 characters' : '••••••••••••'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-900 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:border-emerald-500/80 transition-colors"

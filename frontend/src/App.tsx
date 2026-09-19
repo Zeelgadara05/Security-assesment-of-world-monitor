@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { DashboardLayout } from './layouts/DashboardLayout';
 import { Dashboard } from './pages/Dashboard';
@@ -10,21 +10,29 @@ import { AIChat } from './pages/AIChat';
 import { KnowledgeBase } from './pages/KnowledgeBase';
 import { Settings } from './pages/Settings';
 import { Auth } from './pages/Auth';
+import { getToken, clearToken, onUnauthorized, apiFetch } from './api';
 
 const App: React.FC = () => {
-  // Simple session authentication hook
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('cyberagent_session') === 'active';
+    return getToken() !== null;
   });
 
+  useEffect(() => {
+    onUnauthorized(() => setIsAuthenticated(false));
+    return () => onUnauthorized(() => {});
+  }, []);
+
   const handleLoginSuccess = () => {
-    localStorage.setItem('cyberagent_session', 'active');
     setIsAuthenticated(true);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('cyberagent_session');
+    const token = getToken();
+    clearToken();
     setIsAuthenticated(false);
+    if (token) {
+      apiFetch('/auth/logout', { method: 'POST' }).catch(() => {});
+    }
   };
 
   if (!isAuthenticated) {
@@ -33,7 +41,7 @@ const App: React.FC = () => {
 
   return (
     <Router>
-      <DashboardLayout>
+      <DashboardLayout onLogout={handleLogout}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/scan/new" element={<NewScan />} />

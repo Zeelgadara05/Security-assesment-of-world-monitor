@@ -6,7 +6,8 @@ from database.connection import SessionLocal
 from database.models import Scan, ToolResult, Vulnerability, Asset, Report
 from app.tools.scanner_tools import (
     run_subfinder, run_assetfinder, run_dnsx, run_nmap,
-    run_httpx, run_nuclei, run_gau, run_whatweb
+    run_httpx, run_nuclei, run_gau, run_whatweb,
+    STATE_NOT_INSTALLED, STATE_TIMEOUT, STATE_PARSE_FAILED, STATE_EXECUTION_FAILED,
 )
 
 logger = logging.getLogger("cyberagent.workflow")
@@ -208,10 +209,19 @@ def save_tool_result(db, scan_id: int, tool_name: str, result: dict, simulated: 
             "[SIMULATED] Tool output is synthetic (SIMULATION_MODE). "
             "This is NOT the result of a real security assessment.\n" + raw_output
         )
+
+    status_map = {
+        "success": "Completed",
+        STATE_NOT_INSTALLED: STATE_NOT_INSTALLED,
+        STATE_TIMEOUT: STATE_TIMEOUT,
+        STATE_PARSE_FAILED: STATE_PARSE_FAILED,
+        STATE_EXECUTION_FAILED: "Failed",
+    }
+    status = status_map.get(result.get("status"), "Failed")
     tool_result = ToolResult(
         scan_id=scan_id,
         tool_name=tool_name,
-        status="Completed" if result.get("status") == "success" else "Failed",
+        status=status,
         raw_output=raw_output
     )
     db.add(tool_result)

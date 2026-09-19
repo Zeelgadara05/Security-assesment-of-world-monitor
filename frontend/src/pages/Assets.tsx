@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ReactFlow, MiniMap, Controls, Background, useNodesState, useEdgesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Server, Globe, ShieldAlert, Cpu } from 'lucide-react';
-import { API_URL } from '../api';
+import { apiFetch } from '../api';
 
 export const Assets: React.FC = () => {
   const [assets, setAssets] = useState<any[]>([]);
@@ -13,7 +13,7 @@ export const Assets: React.FC = () => {
 
   const fetchAssets = async () => {
     try {
-      const res = await fetch(`${API_URL}/auth/assets`);
+      const res = await apiFetch('/auth/assets');
       if (res.ok) {
         const data = await res.json();
         setAssets(data);

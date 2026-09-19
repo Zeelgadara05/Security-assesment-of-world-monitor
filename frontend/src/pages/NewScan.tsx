@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ShieldAlert, Play, Terminal, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { API_URL } from '../api';
+import { apiFetch, authUrl } from '../api';
 
 export const NewScan: React.FC = () => {
   const [target, setTarget] = useState('');
@@ -11,10 +11,51 @@ export const NewScan: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [status, setStatus] = useState('Pending');
   const [score, setScore] = useState<number | null>(null);
-  
+  const [scopeList, setScopeList] = useState<string[]>([]);
+  const [scopeTarget, setScopeTarget] = useState('');
+  const [scopeError, setScopeError] = useState('');
+
   const logTerminalRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const navigate = useNavigate();
+
+  const fetchScope = async () => {
+    try {
+      const res = await apiFetch('/scans/scope');
+      if (res.ok) {
+        const data = await res.json();
+        setScopeList(Array.isArray(data?.scope) ? data.scope : []);
+      }
+    } catch (err) {
+      console.error('Error fetching scope:', err);
+    }
+  };
+
+  const addScope = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!scopeTarget.trim()) return;
+    setScopeError('');
+    try {
+      const res = await apiFetch('/scans/scope', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: scopeTarget.trim() })
+      });
+      if (res.ok) {
+        setScopeTarget('');
+        await fetchScope();
+      } else {
+        const errData = await res.json().catch(() => null);
+        setScopeError(errData?.detail || 'Could not add target to scope.');
+      }
+    } catch (err) {
+      setScopeError('Server connection failed.');
+    }
+  };
+
+  useEffect(() => {
+    fetchScope();
+  }, []);
 
   const handleTrigger = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,15 +69,22 @@ export const NewScan: React.FC = () => {
     setScore(null);
 
     try {
-      const res = await fetch(`${API_URL}/scans/trigger`, {
+      const res = await apiFetch('/scans/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target: target.trim() })
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || 'Failed to trigger scan.');
+        const errData = await res.json().catch(() => null);
+        const detail = typeof errData?.detail === 'string' ? errData.detail : (errData?.detail?.msg || errData?.detail || 'Failed to trigger scan.');
+        if (res.status === 403) {
+          throw new Error(`Target outside authorized scope: ${detail}`);
+        }
+        if (res.status === 401) {
+          throw new Error('Session expired. Please log in again.');
+        }
+        throw new Error(detail);
       }
 
       const data = await res.json();
@@ -54,7 +102,7 @@ export const NewScan: React.FC = () => {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`${API_URL}/scans/${id}/stream`);
+    const es = new EventSource(authUrl(`/scans/${id}/stream`));
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -188,7 +236,53 @@ export const NewScan: React.FC = () => {
           )}
         </div>
 
-        {/* Live SSE terminal output logs */}
+        {/* Authorized scope manager */}
+        <div className="glass-card p-6 space-y-4 h-fit">
+          <h3 className="text-sm font-semibold text-slate-300">Authorized Scope</h3>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            Triggers are only allowed for declared targets / IPs / CIDR blocks. Add a
+            host, an IP, or a block to authorize it.
+          </p>
+
+          <form onSubmit={addScope} className="flex gap-2">
+            <input
+              type="text"
+              placeholder="e.g. example.com, 192.168.1.0/24"
+              value={scopeTarget}
+              onChange={(e) => setScopeTarget(e.target.value)}
+              className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
+            />
+            <button
+              type="submit"
+              disabled={!scopeTarget.trim()}
+              className="bg-slate-900 border border-slate-800 hover:bg-slate-800 disabled:bg-slate-950 disabled:text-slate-600 text-slate-300 text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer transition-colors flex-shrink-0"
+            >
+              Add
+            </button>
+          </form>
+
+          {scopeError && (
+            <div className="flex gap-2 bg-red-950/20 border border-red-800/20 p-2.5 rounded-lg text-[10px] text-red-400">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              <span>{scopeError}</span>
+            </div>
+          )}
+
+          {scopeList.length === 0 ? (
+            <p className="text-[10px] text-slate-600">No scope declared yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {scopeList.map((entry) => (
+                <span
+                  key={entry}
+                  className="text-[10px] font-mono bg-slate-900 border border-slate-800 text-emerald-400 px-2 py-1 rounded"
+                >
+                  {entry}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="glass-card p-6 lg:col-span-2 space-y-4 flex flex-col h-[400px]">
           <div className="flex justify-between items-center flex-shrink-0">
             <div className="flex items-center gap-2">

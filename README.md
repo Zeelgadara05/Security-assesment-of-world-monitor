@@ -9,12 +9,17 @@ streaming.
 
 ## Status
 
-This repository is in **Phase 1 of an active stabilization effort**. The foundation
-is currently: Web UI in React + Vite + TypeScript, backend API in FastAPI, data stored
-in SQLite (Alembic-managed schema), scans running in simulation mode by default. The
-security-scan *tools* are invoked through a simulated pipeline; **no live network
-probing, real authentication, or production-grade reporting exists yet**. See
-`docs/PHASE_1_IMPLEMENTATION.md` and `docs/SIH_ARCHITECTURE_AUDIT.md` for details.
+This repository is in **Phase 2 of an active stabilization effort** (authentication,
+authorization/RBAC, scope enforcement, and a scanner-adapter foundation). The
+foundation is currently: Web UI in React + Vite + TypeScript, backend API in
+FastAPI, data stored in SQLite (Alembic-managed schema). Real, persistable logins
+(PBKDF2-hashed passwords, revocable opaque session tokens), per-user scan isolation
+and target-scope enforcement are in place. Scans still run in simulation mode by
+default: synthetic output is explicitly marked `[SIMULATION]`/`[SIMULATED]`, and
+with `SIMULATION_MODE=false` missing scanner binaries are reported as
+NOT INSTALLED (never fabricated). **No live network probing or production-grade
+reporting exists yet.** See `docs/PHASE_2_IMPLEMENTATION.md`,
+`docs/PHASE_2_REALITY_AUDIT.md`, and `docs/SIH_ARCHITECTURE_AUDIT.md` for details.
 
 ## Architecture & Tech Stack
 
@@ -46,15 +51,17 @@ venv\Scripts\activate                # Windows
 pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env                # adjust values if needed
 alembic upgrade head                # create/migrate the database schema
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8003 --reload
 ```
 
 The backend API docs are available at `http://127.0.0.1:8001/docs`.
 
-> Port convention: in this development environment host port `8000` is occupied by
-> an external service, so the CyberAgent backend runs on `127.0.0.1:8001` and the
-> frontend is configured accordingly (`VITE_API_URL=http://127.0.0.1:8001`). Always use
-> `127.0.0.1`, not `localhost`, because `localhost` resolves to IPv6 `::1` here.
+> Port convention: in this development environment host ports `8000` and `8001`
+> are occupied by unrelated services (an external service and Docker Desktop), so
+> run the CyberAgent backend on a free port such as `127.0.0.1:8003` and point the
+> frontend at it via `VITE_API_URL=http://127.0.0.1:8003` (see `frontend/.env.example`).
+> Always use `127.0.0.1`, not `localhost`, because `localhost` resolves to IPv6
+> `::1` here.
 
 ### Frontend
 
@@ -79,34 +86,43 @@ directory and never touch `backend/cyberagent.db`.
 
 ## Implementation Status
 
-### Implemented (Phase 1 scope)
-- Config-driven runtime settings via `backend/app/config.py` (`DATABASE_URL`,
-  `SIMULATION_MODE`, `CORS_ORIGINS`, `REDIS_URL` reserved).
-- Alembic-managed schema; startup runs `verify_schema()` (fails loudly if the
-  database was not migrated) and idempotently seeds the demo user/"Default Sandbox"
-  project via `seed_defaults()`.
-- CORS configured from `CORS_ORIGINS` (no wildcard combined with credentials).
-- Scan lifecycle: `completed_at` is populated on success and failure; simulation-mode
-  output is consistently marked `[SIMULATION]`/`[SIMULATED]` in logs and tool results.
-- Dependency manifests (`requirements.txt`, `requirements-dev.txt`) with pinned
-  versions; `.env.example` templates for backend and frontend.
-- pytest suite (28 tests) covering imports, CORS, schema/migrations, seeding,
-  target validation, scan lifecycle, and simulation markers.
-- Dead Vite template files removed; frontend API base URL centralized in `src/api.ts`.
+### Implemented (Phase 2 scope)
+- Real authentication: `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`,
+  `GET /auth/me`. Passwords hashed with stdlib PBKDF2 (no extra deps); sessions are opaque
+  32-byte tokens, only SHA-256 digests stored, TTL via `SESSION_TTL_HOURS`.
+- Ownership + RBAC: every scan/report/asset/chat record resolves through the signed-in
+  user's project; foreign resources return 404. Roles `user`/`admin`
+  (`GET /auth/users`, `GET /auth/admin/overview`).
+- Scope enforcement: `GET/POST /scans/scope` declares targets (domain/IP/CIDR); triggers
+  outside scope are rejected with 403; discovered assets extend the effective scope.
+- Scanner-adapter foundation: per-tool adapters with honest states (Not Installed /
+  Timeout / Execution Failed / Parse Failed), `shutil.which` availability checks,
+  injection-safe list-based argument execution, honest Nuclei JSON parsing.
+- Frontend auth flow: real login/register, token storage, `Authorization` headers,
+  SSE/download token transport, 401 automatic logout, real user in the sidebar,
+  honest Settings copy.
+- Phase 1 items: config-driven settings, Alembic-managed schema, `verify_schema()`,
+  simulation markers, pinned manifests, isolated pytest suite (81 tests), centralized
+  `src/api.ts`.
 
-### Planned (NOT yet implemented — Phase 2+)
-- Real authentication/RBAC (current backend routes use a demo identity only).
-- Live scanner integrations and real network execution (simulation mode stays the
-  default until then).
-- Real report generation (current PDF is a mock of the markdown source) and a
-  durable report store.
+### Planned (NOT yet implemented — later phases)
+- Live scanner executions on this host (tools currently report NOT INSTALLED when
+  `SIMULATION_MODE=false`; install binaries to PATH to enable real runs).
+- Real PDF generation (current PDF endpoint serves stored report bytes labeled simulated).
 - LLM/RAG-based AI analysis, Celery/Redis queueing, and containerization.
-- CI pipeline.
+- CI pipeline, World Monitor integration.
 
 ## Security & Guardrails
 
 - **Simulation mode is on by default.** While enabled, the scan pipeline produces
   explicit synthetic output marked `[SIMULATION]`/`[SIMULATED]`; do not treat any
-  findings as a real security assessment.
-- Command execution is parameterized (list-based subprocess arguments) to avoid
-  shell injection if real tools are ever enabled.
+  findings as a real security assessment. With `SIMULATION_MODE=false`, missing
+  binaries are reported as NOT INSTALLED and never faked.
+- **Real authentication.** No demo account is auto-created. Registrations are
+  open (`/auth/register`) by design for this deployment; password hashing uses
+  PBKDF2-SHA256 (600k iterations) and session tokens are stored as SHA-256 digests
+  only.
+- **Scope enforcement.** Scan triggers outside the declared scope are rejected with
+  403; request logging and CORS use explicit origins with `allow_credentials=True`.
+- Command execution is parameterized (list-based subprocess arguments, `shell=False`)
+  with sanitization, so real tool invocations remain injection-safe.

@@ -35,44 +35,35 @@ def verify_schema(engine=engine):
         )
 
 def seed_defaults(db=None):
-    """Idempotently seeds the demo user and Default Sandbox project.
+    """Idempotently seeds the bootstrap admin user from configuration.
+
+    No rows are created unless ``ADMIN_EMAIL`` and ``ADMIN_PASSWORD`` are both
+    explicitly set in the environment (see app.config.settings.admin_enabled),
+    so there is never an implicit, hardcoded identity.  Existing production
+    user data is never touched.
 
     This does not create or drop any table; it only inserts rows when they
     do not exist yet. Safe to call on every startup.
     """
+    if not settings.admin_enabled:
+        return
     owns_session = db is None
     if owns_session:
         db = SessionLocal()
     try:
-        demo_user = db.query(User).filter(User.id == "demo-user-id").first()
-        if not demo_user:
-            demo_user = User(id="demo-user-id", email="demo@cyberagent.ai")
-            db.add(demo_user)
-            db.commit()
-            db.refresh(demo_user)
+        admin = db.query(User).filter(User.email == settings.admin_email).first()
+        if admin is None:
+            from app.core.security import hash_password
 
-        demo_project = db.query(Project).filter(Project.name == "Default Sandbox").first()
-        if not demo_project:
-            demo_project = Project(
-                name="Default Sandbox",
-                description="Default environment for testing target networks, subdomains, and assets.",
-                user_id=demo_user.id
+            admin = User(
+                id="admin-" + settings.admin_email,
+                email=settings.admin_email,
+                password_hash=hash_password(settings.admin_password),
+                role="admin",
             )
-            db.add(demo_project)
+            db.add(admin)
             db.commit()
-            db.refresh(demo_project)
-
-            # Add some seed assets
-            assets = [
-                Asset(project_id=demo_project.id, type="domain", value="sandbox.cyberagent.ai", metadata_json={"status": "active"}),
-                Asset(project_id=demo_project.id, type="ip", value="104.244.42.1", metadata_json={"status": "resolved"}),
-                Asset(project_id=demo_project.id, type="port", value="80/tcp", metadata_json={"service": "http", "product": "nginx"}),
-                Asset(project_id=demo_project.id, type="port", value="443/tcp", metadata_json={"service": "https", "product": "nginx"}),
-                Asset(project_id=demo_project.id, type="tech", value="React", metadata_json={"version": "19.0.0"}),
-                Asset(project_id=demo_project.id, type="tech", value="FastAPI", metadata_json={"version": "0.115.0"}),
-            ]
-            db.add_all(assets)
-            db.commit()
+            db.refresh(admin)
     except Exception:
         db.rollback()
         raise

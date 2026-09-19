@@ -1,11 +1,43 @@
+"""Scanner tool adapters.
+
+Every scanner in this project is a thin, typed adapter over an external CLI
+binary.  Two boundaries are strictly enforced here:
+
+  * availability -- when a binary is not installed on PATH the adapter returns
+    an explicit NOT_INSTALLED state.  The workflow NEVER fabricates a result
+    for a missing scanner and never silently substitutes simulated output for
+    a real failure.
+  * execution    -- binaries are always invoked as a list of arguments with
+    ``shell=False`` so no attacker-controlled input can be interpreted as a
+    shell command.  Inputs pass through ``sanitize_input`` and each execution
+    has a hard timeout.
+
+Simulation remains a distinct, explicit mode: when ``simulation=True`` the
+adapters return deterministic synthetic markers (prefixed with [SIMULATED]
+upstream) and they must never be presented as real findings.
+"""
 import subprocess
-import shlex
+import shutil
 import re
-import random
+import json
 import time
 import logging
 
 logger = logging.getLogger("cyberagent.tools")
+
+# ---------------------------------------------------------------------------
+# Tool result states
+# ---------------------------------------------------------------------------
+STATE_COMPLETED = "Completed"
+STATE_NOT_INSTALLED = "Not Installed"
+STATE_EXECUTION_FAILED = "Execution Failed"
+STATE_TIMEOUT = "Timeout"
+STATE_PARSE_FAILED = "Parse Failed"
+
+# Per-scanner execution budget (seconds). Chosen generously because security
+# tools like nmap can legitimately take a while on large targets.
+BINARY_TIMEOUT_SECONDS = 90
+
 
 def sanitize_input(target: str) -> str:
     """Sanitize the target input to prevent command injection."""
@@ -13,97 +45,216 @@ def sanitize_input(target: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9.\-/]", "", target)
     return sanitized
 
-def run_subfinder(target: str, simulation: bool = True) -> dict:
-    """Runs subfinder subdomain discovery."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running subfinder for target: {sanitized}")
-    if simulation:
+
+def is_tool_installed(binary: str) -> bool:
+    """True when the scanner executable is resolvable on PATH."""
+    return shutil.which(binary) is not None
+
+
+class ScannerAdapter:
+    """Base adapter: owns availability, execution and result-state mapping."""
+
+    tool_name: str = ""
+    binary: str = ""
+
+    def available(self) -> bool:
+        return is_tool_installed(self.binary)
+
+    def simulate(self, target: str, sanitized: str) -> dict:
+        raise NotImplementedError()
+
+    def run_real(self, target: str, sanitized: str) -> dict:
+        raise NotImplementedError()
+
+    def execute(self, args: list[str], sanitized_arg: bool = True) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=BINARY_TIMEOUT_SECONDS,
+            shell=False,
+        )
+
+    def run(self, target: str, simulation: bool = True) -> dict:
+        sanitized = sanitize_input(target)
+        logger.info(f"Running {self.tool_name} for target: {sanitized}")
+        if simulation:
+            return self.simulate(target, sanitized)
+        if not self.available():
+            logger.warning(f"{self.binary} is not installed on PATH; skipping {self.tool_name}.")
+            return {
+                "tool": self.tool_name,
+                "status": STATE_NOT_INSTALLED,
+                "error": f"{self.binary} not found on PATH",
+                "log": f"[{self.tool_name}] NOT INSTALLED: {self.binary} is not available on PATH. No scan was executed.",
+            }
+        try:
+            return self.run_real(target, sanitized)
+        except FileNotFoundError:
+            return {
+                "tool": self.tool_name,
+                "status": STATE_NOT_INSTALLED,
+                "error": f"{self.binary} not found on PATH",
+                "log": f"[{self.tool_name}] NOT INSTALLED: {self.binary} is not available on PATH. No scan was executed.",
+            }
+        except subprocess.TimeoutExpired:
+            logger.error(f"{self.tool_name} exceeded {BINARY_TIMEOUT_SECONDS}s timeout.")
+            return {
+                "tool": self.tool_name,
+                "status": STATE_TIMEOUT,
+                "error": f"Execution exceeded {BINARY_TIMEOUT_SECONDS}s",
+                "log": f"[{self.tool_name}] TIMEOUT: execution exceeded {BINARY_TIMEOUT_SECONDS}s and was terminated.",
+            }
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error running {self.tool_name}: {e.stderr or e}")
+            return {
+                "tool": self.tool_name,
+                "status": STATE_EXECUTION_FAILED,
+                "error": (e.stderr or str(e))[:500],
+                "log": f"[{self.tool_name}] EXECUTION FAILED: {e.stderr or e}",
+            }
+        except Exception as e:
+            logger.error(f"Error running {self.tool_name}: {e}")
+            return {
+                "tool": self.tool_name,
+                "status": STATE_EXECUTION_FAILED,
+                "error": str(e),
+                "log": f"[{self.tool_name}] EXECUTION FAILED: {e}",
+            }
+
+
+# ---------------------------------------------------------------------------
+# Per-scanner adapters
+# ---------------------------------------------------------------------------
+class SubfinderAdapter(ScannerAdapter):
+    tool_name = "subfinder"
+    binary = "subfinder"
+
+    def simulate(self, target, sanitized):
         time.sleep(2)
         domains = [f"api.{sanitized}", f"dev.{sanitized}", f"vpn.{sanitized}", f"staging.{sanitized}", f"db.{sanitized}"]
         return {
-            "tool": "subfinder",
+            "tool": self.tool_name,
             "status": "success",
             "subdomains": domains,
-            "log": f"[subfinder] Discovered {len(domains)} subdomains for {sanitized}\n" + "\n".join([f"  -> {d}" for d in domains])
+            "log": f"[subfinder] Discovered {len(domains)} subdomains for {sanitized}\n" + "\n".join([f"  -> {d}" for d in domains]),
         }
 
-    try:
-        cmd = ["subfinder", "-d", sanitized, "-silent"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    def run_real(self, target, sanitized):
+        result = self.execute(["subfinder", "-d", sanitized, "-silent"])
         subdomains = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        return {"tool": "subfinder", "status": "success", "subdomains": subdomains, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running subfinder: {e}")
-        return {"tool": "subfinder", "status": "failed", "error": str(e), "log": f"Error running subfinder: {e}"}
+        return {"tool": self.tool_name, "status": "success", "subdomains": subdomains, "log": result.stdout}
 
-def run_assetfinder(target: str, simulation: bool = True) -> dict:
-    """Runs assetfinder subdomain discovery."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running assetfinder for target: {sanitized}")
-    if simulation:
+
+class AssetfinderAdapter(ScannerAdapter):
+    tool_name = "assetfinder"
+    binary = "assetfinder"
+
+    def simulate(self, target, sanitized):
         time.sleep(1.5)
         domains = [f"admin.{sanitized}", f"test.{sanitized}", f"portal.{sanitized}"]
         return {
-            "tool": "assetfinder",
+            "tool": self.tool_name,
             "status": "success",
             "subdomains": domains,
-            "log": f"[assetfinder] Discovered {len(domains)} subdomains for {sanitized}\n" + "\n".join([f"  -> {d}" for d in domains])
+            "log": f"[assetfinder] Discovered {len(domains)} subdomains for {sanitized}\n" + "\n".join([f"  -> {d}" for d in domains]),
         }
 
-    try:
-        cmd = ["assetfinder", "--subs-only", sanitized]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    def run_real(self, target, sanitized):
+        result = self.execute(["assetfinder", "--subs-only", sanitized])
         subdomains = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        return {"tool": "assetfinder", "status": "success", "subdomains": subdomains, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running assetfinder: {e}")
-        return {"tool": "assetfinder", "status": "failed", "error": str(e), "log": f"Error running assetfinder: {e}"}
+        return {"tool": self.tool_name, "status": "success", "subdomains": subdomains, "log": result.stdout}
 
-def run_dnsx(target: str, subdomains: list, simulation: bool = True) -> dict:
-    """Runs dnsx for resolving active subdomains and checking DNS records."""
-    logger.info(f"Running dnsx for {len(subdomains)} subdomains of target: {target}")
-    if simulation:
+
+class DnsxAdapter(ScannerAdapter):
+    tool_name = "dnsx"
+    binary = "dnsx"
+
+    def simulate(self, target, sanitized):
+        subdomains = self._subdomains()
         time.sleep(2)
         resolved = []
         for sub in subdomains:
             resolved.append({
                 "subdomain": sub,
-                "ip": f"104.244.{random.randint(10, 250)}.{random.randint(10, 250)}",
-                "type": "A"
+                "ip": f"104.244.{random_int(10, 250)}.{random_int(10, 250)}",
+                "type": "A",
             })
         return {
-            "tool": "dnsx",
+            "tool": self.tool_name,
             "status": "success",
             "resolved": resolved,
-            "log": "[dnsx] DNS resolution complete.\n" + "\n".join([f"  -> {r['subdomain']} resolves to {r['ip']}" for r in resolved])
+            "log": "[dnsx] DNS resolution complete.\n" + "\n".join([f"  -> {r['subdomain']} resolves to {r['ip']}" for r in resolved]),
         }
 
-    try:
+    def _subdomains(self):
+        # dnsx receives subdomains gathered by subfinder/assetfinder; when the
+        # workflow has none it falls back to the target itself.
+        return getattr(self, "_provided_subdomains", None) or [self._last_target]
+
+    def set_subdomains(self, subdomains: list):
+        self._provided_subdomains = subdomains
+
+    def run(self, target, simulation=True, subdomains=None):
+        sanitized = sanitize_input(target)
+        if subdomains is not None:
+            self._provided_subdomains = subdomains
+        self._last_target = sanitized
+        logger.info(f"Running dnsx for {len(subdomains or [])} subdomains of target: {sanitized}")
+        if simulation:
+            return self.simulate(target, sanitized)
+        if not self.available():
+            return {
+                "tool": self.tool_name,
+                "status": STATE_NOT_INSTALLED,
+                "error": "dnsx not found on PATH",
+                "log": "[dnsx] NOT INSTALLED: dnsx is not available on PATH. No scan was executed.",
+            }
+        try:
+            resolved = []
+            for sub in (subdomains or [sanitized]):
+                sanitized_sub = sanitize_input(sub)
+                result = subprocess.run(
+                    ["dnsx", "-d", sanitized_sub, "-resp-only", "-silent"],
+                    capture_output=True, text=True, timeout=BINARY_TIMEOUT_SECONDS, shell=False,
+                )
+                ips = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                for ip in ips:
+                    resolved.append({"subdomain": sub, "ip": ip, "type": "A"})
+            return {"tool": self.tool_name, "status": "success", "resolved": resolved, "log": f"[dnsx] Resolved {len(resolved)} targets successfully."}
+        except subprocess.TimeoutExpired:
+            return {"tool": self.tool_name, "status": STATE_TIMEOUT, "error": "timeout", "log": "[dnsx] TIMEOUT."}
+        except Exception as e:
+            logger.error(f"Error running dnsx: {e}")
+            return {"tool": self.tool_name, "status": STATE_EXECUTION_FAILED, "error": str(e), "log": f"Error running dnsx: {e}"}
+
+    def run_real(self, target, sanitized):
         resolved = []
-        for sub in subdomains:
+        for sub in (self._provided_subdomains or [sanitized]):
             sanitized_sub = sanitize_input(sub)
-            cmd = ["dnsx", "-d", sanitized_sub, "-resp-only", "-silent"]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(
+                ["dnsx", "-d", sanitized_sub, "-resp-only", "-silent"],
+                capture_output=True, text=True, timeout=BINARY_TIMEOUT_SECONDS, shell=False,
+            )
             ips = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             for ip in ips:
                 resolved.append({"subdomain": sub, "ip": ip, "type": "A"})
-        return {"tool": "dnsx", "status": "success", "resolved": resolved, "log": f"[dnsx] Resolved {len(resolved)} targets successfully."}
-    except Exception as e:
-        logger.error(f"Error running dnsx: {e}")
-        return {"tool": "dnsx", "status": "failed", "error": str(e), "log": f"Error running dnsx: {e}"}
+        return {"tool": self.tool_name, "status": "success", "resolved": resolved, "log": f"[dnsx] Resolved {len(resolved)} targets successfully."}
 
-def run_nmap(target: str, simulation: bool = True) -> dict:
-    """Runs nmap for open ports & service discovery."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running nmap port scan on: {sanitized}")
-    if simulation:
+
+class NmapAdapter(ScannerAdapter):
+    tool_name = "nmap"
+    binary = "nmap"
+
+    def simulate(self, target, sanitized):
         time.sleep(3)
         ports = [
             {"port": 80, "protocol": "tcp", "state": "open", "service": "http", "product": "nginx", "version": "1.18.0"},
             {"port": 443, "protocol": "tcp", "state": "open", "service": "https", "product": "nginx", "version": "1.18.0"},
             {"port": 22, "protocol": "tcp", "state": "open", "service": "ssh", "product": "OpenSSH", "version": "8.2p1"},
             {"port": 8080, "protocol": "tcp", "state": "open", "service": "http-proxy", "product": "Node.js Express", "version": "4.17.1"},
-            {"port": 5432, "protocol": "tcp", "state": "filtered", "service": "postgresql", "product": "PostgreSQL", "version": "14.0"}
+            {"port": 5432, "protocol": "tcp", "state": "filtered", "service": "postgresql", "product": "PostgreSQL", "version": "14.0"},
         ]
         log = f"Starting Nmap 7.92 ( https://nmap.org ) at 2026-06-28 13:54\n"
         log += f"Nmap scan report for {sanitized}\n"
@@ -111,12 +262,10 @@ def run_nmap(target: str, simulation: bool = True) -> dict:
         log += f"PORT     STATE    SERVICE       VERSION\n"
         for p in ports:
             log += f"{p['port']}/{p['protocol']:4} {p['state']:8} {p['service']:13} {p['product']} {p['version']}\n"
-        return {"tool": "nmap", "status": "success", "ports": ports, "log": log}
+        return {"tool": self.tool_name, "status": "success", "ports": ports, "log": log}
 
-    try:
-        cmd = ["nmap", "-sV", "-T4", "-F", sanitized]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Parse standard nmap format simply
+    def run_real(self, target, sanitized):
+        result = self.execute(["nmap", "-sV", "-T4", "-F", sanitized])
         ports = []
         for line in result.stdout.splitlines():
             match = re.match(r"^(\d+)/(tcp|udp)\s+(\w+)\s+(\S+)\s*(.*)$", line)
@@ -127,51 +276,95 @@ def run_nmap(target: str, simulation: bool = True) -> dict:
                     "state": match.group(3),
                     "service": match.group(4),
                     "product": match.group(5) or "unknown",
-                    "version": ""
+                    "version": "",
                 })
-        return {"tool": "nmap", "status": "success", "ports": ports, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running nmap: {e}")
-        return {"tool": "nmap", "status": "failed", "error": str(e), "log": f"Error running nmap: {e}"}
+        return {"tool": self.tool_name, "status": "success", "ports": ports, "log": result.stdout}
 
-def run_httpx(target: str, simulation: bool = True) -> dict:
-    """Runs httpx to probe web endpoints and active status."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running httpx web discovery on: {sanitized}")
-    if simulation:
+
+class HttpxAdapter(ScannerAdapter):
+    tool_name = "httpx"
+    binary = "httpx"
+
+    def simulate(self, target, sanitized):
         time.sleep(2)
         urls = [f"https://{sanitized}", f"http://{sanitized}"]
         return {
-            "tool": "httpx",
+            "tool": self.tool_name,
             "status": "success",
             "urls": [{"url": u, "status_code": 200, "title": "Dashboard", "server": "nginx"} for u in urls],
-            "log": "\n".join([f"{u} [200] [nginx] [Dashboard]" for u in urls])
+            "log": "\n".join([f"{u} [200] [nginx] [Dashboard]" for u in urls]),
         }
 
-    try:
-        cmd = ["httpx", "-u", sanitized, "-status-code", "-title", "-web-server", "-silent"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    def run_real(self, target, sanitized):
+        result = self.execute(["httpx", "-u", sanitized, "-status-code", "-title", "-web-server", "-silent"])
         urls = []
         for line in result.stdout.splitlines():
-            # Parses standard httpx format
             parts = line.strip().split(" ")
             if len(parts) >= 2:
+                try:
+                    status_code = int(parts[1].strip("[]"))
+                except ValueError:
+                    status_code = 0
                 urls.append({
                     "url": parts[0],
-                    "status_code": int(parts[1].strip("[]")),
+                    "status_code": status_code,
                     "title": parts[2] if len(parts) > 2 else "",
-                    "server": parts[3] if len(parts) > 3 else "unknown"
+                    "server": parts[3] if len(parts) > 3 else "unknown",
                 })
-        return {"tool": "httpx", "status": "success", "urls": urls, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running httpx: {e}")
-        return {"tool": "httpx", "status": "failed", "error": str(e), "log": f"Error running httpx: {e}"}
+        return {"tool": self.tool_name, "status": "success", "urls": urls, "log": result.stdout}
 
-def run_nuclei(target: str, simulation: bool = True) -> dict:
-    """Runs nuclei vulnerability scanning."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running nuclei scans on: {sanitized}")
-    if simulation:
+
+class GauAdapter(ScannerAdapter):
+    tool_name = "gau"
+    binary = "gau"
+
+    def simulate(self, target, sanitized):
+        time.sleep(1.5)
+        urls = [
+            f"https://{sanitized}/login",
+            f"https://{sanitized}/admin",
+            f"https://{sanitized}/api/v1/users",
+            f"https://{sanitized}/dashboard",
+            f"https://{sanitized}/settings",
+        ]
+        return {
+            "tool": self.tool_name,
+            "status": "success",
+            "urls": urls,
+            "log": f"[gau] Discovered {len(urls)} cached endpoints:\n" + "\n".join([f"  - {u}" for u in urls]),
+        }
+
+    def run_real(self, target, sanitized):
+        result = self.execute(["gau", sanitized])
+        urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return {"tool": self.tool_name, "status": "success", "urls": urls, "log": result.stdout}
+
+
+class WhatwebAdapter(ScannerAdapter):
+    tool_name = "whatweb"
+    binary = "whatweb"
+
+    def simulate(self, target, sanitized):
+        time.sleep(1.5)
+        techs = ["React 19", "FastAPI", "Python 3.12", "PostgreSQL", "Nginx 1.18.0", "Ubuntu"]
+        return {
+            "tool": self.tool_name,
+            "status": "success",
+            "techs": techs,
+            "log": f"WhatWeb scan report for {sanitized}\n" + f"Summary: nginx[1.18.0], React[19], FastAPI[Python 3.12], Ubuntu Linux",
+        }
+
+    def run_real(self, target, sanitized):
+        result = self.execute(["whatweb", sanitized])
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return {"tool": self.tool_name, "status": "success", "techs": lines or [result.stdout.strip()], "log": result.stdout}
+
+
+class NucleiAdapter(ScannerAdapter):
+    tool_name = "nuclei"
+    binary = "nuclei"
+
+    def simulate(self, target, sanitized):
         time.sleep(4)
         vulnerabilities = [
             {
@@ -183,7 +376,7 @@ def run_nuclei(target: str, simulation: bool = True) -> dict:
                 "mitre": "T1190 - Exploit Public-Facing Application",
                 "description": "A SQL injection vulnerability exists in the admin search page due to improper sanitation of user inputs.",
                 "remediation": "Use parameterized queries and bind variables in all database search APIs.",
-                "proof_of_concept": f"GET /admin/search?q=1'+OR+'1'='1' HTTP/1.1\nHost: {sanitized}\n\nResponse:\nHTTP/1.1 200 OK\n[Contains complete user table data]"
+                "proof_of_concept": f"GET /admin/search?q=1'+OR+'1'='1' HTTP/1.1\nHost: {sanitized}\n\nResponse:\nHTTP/1.1 200 OK\n[Contains complete user table data]",
             },
             {
                 "title": "Missing Content-Security-Policy (CSP) Header",
@@ -194,7 +387,7 @@ def run_nuclei(target: str, simulation: bool = True) -> dict:
                 "mitre": "T1566 - Phishing / XSS Delivery",
                 "description": "Content-Security-Policy header is missing on the client side login shell.",
                 "remediation": "Add Content-Security-Policy HTTP response headers to control loaded source scripts.",
-                "proof_of_concept": f"GET /login HTTP/1.1\nHost: {sanitized}\n\nResponse Headers:\nHTTP/1.1 200 OK\nServer: nginx\n(No Content-Security-Policy header present)"
+                "proof_of_concept": f"GET /login HTTP/1.1\nHost: {sanitized}\n\nResponse Headers:\nHTTP/1.1 200 OK\nServer: nginx\n(No Content-Security-Policy header present)",
             },
             {
                 "title": "Outdated jQuery Version (1.12.4) with Vulnerability",
@@ -205,85 +398,98 @@ def run_nuclei(target: str, simulation: bool = True) -> dict:
                 "mitre": "T1203 - Exploitation for Client Execution",
                 "description": "The client application uses jQuery 1.12.4, which is susceptible to cross-site scripting attacks via remote links.",
                 "remediation": "Upgrade jQuery dependency to the latest supported version (3.7.1 or higher).",
-                "proof_of_concept": f"Detected in resource bundle: /js/jquery-1.12.4.min.js"
-            }
+                "proof_of_concept": f"Detected in resource bundle: /js/jquery-1.12.4.min.js",
+            },
         ]
         log = "[nuclei] Scan started against " + sanitized + "\n"
         for v in vulnerabilities:
             log += f"[{v['severity']}] [{v['cve'] or 'unknown'}] [{v['owasp']}] -> {v['title']}\n"
-        return {"tool": "nuclei", "status": "success", "vulnerabilities": vulnerabilities, "log": log}
+        return {"tool": self.tool_name, "status": "success", "vulnerabilities": vulnerabilities, "log": log}
 
-    try:
-        cmd = ["nuclei", "-target", sanitized, "-severity", "info,low,medium,high,critical", "-silent"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Parse nuclei json or custom output lines
+    def run_real(self, target, sanitized):
+        # JSON output mode: every line is a self-contained finding record from
+        # the engine. Output is recorded verbatim except for a lossless JSON
+        # re-serialization; nothing is fabricated when the scanner is silent.
+        result = self.execute(["nuclei", "-target", sanitized, "-json", "-silent"])
         vulnerabilities = []
         for line in result.stdout.splitlines():
-            if line.strip():
-                # Raw text format parses
-                vulnerabilities.append({
-                    "title": line,
-                    "severity": "Medium",
-                    "cve": "CVE-Unknown",
-                    "cvss": 5.0,
-                    "owasp": "A05:2021-Security Misconfiguration",
-                    "mitre": "T1190",
-                    "description": line,
-                    "remediation": "Apply standard security updates and restrict endpoint controls.",
-                    "proof_of_concept": f"Output line: {line}"
-                })
-        return {"tool": "nuclei", "status": "success", "vulnerabilities": vulnerabilities, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running nuclei: {e}")
-        return {"tool": "nuclei", "status": "failed", "error": str(e), "log": f"Error running nuclei: {e}"}
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # A malformed line means the runner's output cannot be trusted;
+                # surface the raw line as a parse failure rather than inventing
+                # a structured finding the engine did not produce.
+                return {
+                    "tool": self.tool_name,
+                    "status": STATE_PARSE_FAILED,
+                    "error": "Malformed nuclei JSON output line",
+                    "log": "[nuclei] PARSE FAILED: got a non-JSON output line from nuclei -json. Raw line below.\n" + line,
+                }
+            info = record.get("info") or {}
+            vulnerabilities.append({
+                "title": info.get("name") or record.get("template-id") or "Nuclei finding",
+                "severity": (info.get("severity") or "info").capitalize(),
+                "cve": ", ".join((info.get("classification") or {}).get("cve-id") or []) or None,
+                "cvss": None,
+                "owasp": None,
+                "mitre": None,
+                "description": info.get("description") or "Nuclei-generated finding.",
+                "remediation": info.get("remediation") or "Apply the relevant security patch or configuration fix.",
+                "proof_of_concept": f"{record.get('matched-at', target)} {record.get('matcher-name', '')}".strip(),
+            })
+        return {"tool": self.tool_name, "status": "success", "vulnerabilities": vulnerabilities, "log": result.stdout}
+
+
+# ---------------------------------------------------------------------------
+# Registry + module-level functions kept for workflow compatibility
+# ---------------------------------------------------------------------------
+ADAPTERS = {
+    "subfinder": SubfinderAdapter(),
+    "assetfinder": AssetfinderAdapter(),
+    "dnsx": DnsxAdapter(),
+    "nmap": NmapAdapter(),
+    "httpx": HttpxAdapter(),
+    "gau": GauAdapter(),
+    "whatweb": WhatwebAdapter(),
+    "nuclei": NucleiAdapter(),
+}
+
+
+def run_subfinder(target: str, simulation: bool = True) -> dict:
+    return ADAPTERS["subfinder"].run(target, simulation)
+
+
+def run_assetfinder(target: str, simulation: bool = True) -> dict:
+    return ADAPTERS["assetfinder"].run(target, simulation)
+
+
+def run_dnsx(target: str, subdomains: list, simulation: bool = True) -> dict:
+    return ADAPTERS["dnsx"].run(target, simulation, subdomains=subdomains)
+
+
+def run_nmap(target: str, simulation: bool = True) -> dict:
+    return ADAPTERS["nmap"].run(target, simulation)
+
+
+def run_httpx(target: str, simulation: bool = True) -> dict:
+    return ADAPTERS["httpx"].run(target, simulation)
+
+
+def run_nuclei(target: str, simulation: bool = True) -> dict:
+    return ADAPTERS["nuclei"].run(target, simulation)
+
 
 def run_gau(target: str, simulation: bool = True) -> dict:
-    """Runs gau (GetAllUrls) to fetch cached web endpoints."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running gau web crawlers on: {sanitized}")
-    if simulation:
-        time.sleep(1.5)
-        urls = [
-            f"https://{sanitized}/login",
-            f"https://{sanitized}/admin",
-            f"https://{sanitized}/api/v1/users",
-            f"https://{sanitized}/dashboard",
-            f"https://{sanitized}/settings"
-        ]
-        return {
-            "tool": "gau",
-            "status": "success",
-            "urls": urls,
-            "log": f"[gau] Discovered {len(urls)} cached endpoints:\n" + "\n".join([f"  - {u}" for u in urls])
-        }
+    return ADAPTERS["gau"].run(target, simulation)
 
-    try:
-        cmd = ["gau", sanitized]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        return {"tool": "gau", "status": "success", "urls": urls, "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running gau: {e}")
-        return {"tool": "gau", "status": "failed", "error": str(e), "log": f"Error running gau: {e}"}
 
 def run_whatweb(target: str, simulation: bool = True) -> dict:
-    """Runs whatweb to discover server technologies and frameworks."""
-    sanitized = sanitize_input(target)
-    logger.info(f"Running whatweb profile on: {sanitized}")
-    if simulation:
-        time.sleep(1.5)
-        techs = ["React 19", "FastAPI", "Python 3.12", "PostgreSQL", "Nginx 1.18.0", "Ubuntu"]
-        return {
-            "tool": "whatweb",
-            "status": "success",
-            "techs": techs,
-            "log": f"WhatWeb scan report for {sanitized}\n" + f"Summary: nginx[1.18.0], React[19], FastAPI[Python 3.12], Ubuntu Linux"
-        }
+    return ADAPTERS["whatweb"].run(target, simulation)
 
-    try:
-        cmd = ["whatweb", sanitized]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return {"tool": "whatweb", "status": "success", "techs": [result.stdout.strip()], "log": result.stdout}
-    except Exception as e:
-        logger.error(f"Error running whatweb: {e}")
-        return {"tool": "whatweb", "status": "failed", "error": str(e), "log": f"Error running whatweb: {e}"}
+
+def random_int(lo: int, hi: int) -> int:
+    import random
+    return random.randint(lo, hi)

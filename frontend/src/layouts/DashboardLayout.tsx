@@ -1,12 +1,23 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, Radio, FileText, Server, BookOpen, MessageSquare, Settings, ShieldAlert, LogOut } from 'lucide-react';
+import { apiFetch } from '../api';
 
 interface SidebarProps {
   children: React.ReactNode;
+  onLogout: () => void;
 }
 
-export const DashboardLayout: React.FC<SidebarProps> = ({ children }) => {
+export const DashboardLayout: React.FC<SidebarProps> = ({ children, onLogout }) => {
+  const [user, setUser] = useState<{ email: string; role: string } | null>(null);
+
+  useEffect(() => {
+    apiFetch('/auth/me')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data && setUser({ email: data.email, role: data.role || 'user' }))
+      .catch(() => {});
+  }, []);
+
   const menuItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'New Scan', path: '/scan/new', icon: Radio },
@@ -17,6 +28,11 @@ export const DashboardLayout: React.FC<SidebarProps> = ({ children }) => {
     { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
+
+  const initials = (user?.email || '?')
+    .split('@')[0]
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-slate-100 font-sans">
@@ -62,14 +78,21 @@ export const DashboardLayout: React.FC<SidebarProps> = ({ children }) => {
         <div className="border-t border-slate-800/80 pt-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-full bg-slate-800 flex items-center justify-center font-bold text-emerald-500 border border-slate-700">
-              SA
+              {initials}
             </div>
             <div>
-              <p className="text-xs font-semibold text-slate-200">SecAdmin</p>
-              <p className="text-[10px] text-slate-500">demo@cyberagent.ai</p>
+              <p className="text-xs font-semibold text-slate-200">{user?.email ? user.email.split('@')[0] : 'Loading...'}</p>
+              <p className="text-[10px] text-slate-500 capitalize">{user?.email || '...'}</p>
+              {user?.role && (
+                <p className="text-[9px] text-emerald-500 uppercase tracking-widest font-semibold">{user.role}</p>
+              )}
             </div>
           </div>
-          <button className="text-slate-500 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-slate-900 cursor-pointer">
+          <button
+            onClick={onLogout}
+            className="text-slate-500 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-slate-900 cursor-pointer"
+            aria-label="Log out"
+          >
             <LogOut className="w-4 h-4" />
           </button>
         </div>

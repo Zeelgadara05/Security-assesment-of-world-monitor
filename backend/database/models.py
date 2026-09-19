@@ -8,11 +8,14 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String(255), primary_key=True)  # Supabase User ID
+    id = Column(String(255), primary_key=True)  # Generated locally at registration
     email = Column(String(255), nullable=False, unique=True)
+    password_hash = Column(String(512), nullable=True)  # PBKDF2-HMAC-SHA256; NULL for legacy/historical rows
+    role = Column(String(50), nullable=False, default="user")  # "admin" | "user"
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
 
 
 class Project(Base):
@@ -22,11 +25,25 @@ class Project(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     user_id = Column(String(255), ForeignKey("users.id"), nullable=False)
+    scope_json = Column(JSON, default=list)  # List of authorized targets (domains, IPs, CIDRs) owned by the user
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="projects")
     assets = relationship("Asset", back_populates="project", cascade="all, delete-orphan")
     scans = relationship("Scan", back_populates="project", cascade="all, delete-orphan")
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)  # SHA-256 of the opaque token
+    user_id = Column(String(255), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="sessions")
 
 
 class Asset(Base):

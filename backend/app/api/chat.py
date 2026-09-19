@@ -2,23 +2,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from database.connection import get_db
-from database.models import ChatHistory, Scan, Vulnerability
+from database.models import ChatHistory, Scan, Vulnerability, User
+from app.core.auth import get_current_user, get_owned_scan
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
 
 class ChatPayload(BaseModel):
     scan_id: int
     message: str
 
+
 @router.post("/query")
-def submit_chat_query(payload: ChatPayload, db: Session = Depends(get_db)):
+def submit_chat_query(
+    payload: ChatPayload,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Submits a user chat query to the AI Security Copilot.
     Uses target vulnerabilities and context memory to provide specialized remediation instructions.
+    The referenced scan must belong to the authenticated user.
     """
-    scan = db.query(Scan).filter(Scan.id == payload.scan_id).first()
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan reference not found.")
+    scan = get_owned_scan(db, user, payload.scan_id)
 
     # Save user message to history
     user_chat = ChatHistory(scan_id=payload.scan_id, role="user", message=payload.message)
@@ -33,9 +39,9 @@ def submit_chat_query(payload: ChatPayload, db: Session = Depends(get_db)):
     ])
 
     # Simple smart logic fallback rules acting as AI Security Specialist.
-    # In production, this maps to LiteLLM tool/chat completion wrapper.
+    # This is a deterministic, keyword-driven SIMULATED assistant, not an LLM.
     msg_lower = payload.message.lower()
-    
+
     if "sql injection" in msg_lower or "cve-2024-3849" in msg_lower:
         response = (
             "The **SQL Injection (CVE-2024-3849)** finding represents a **Critical** security risk (CVSS 9.8). "
@@ -80,14 +86,14 @@ def submit_chat_query(payload: ChatPayload, db: Session = Depends(get_db)):
             "Action: Inject modern Content-Security-Policy HTTP headers inside reverse proxy config."
         )
     else:
-        # Default AI Response compiled based on scanner findings context
+        # Default response compiled based on scanner findings context
         response = (
             f"Greetings. I am CyberAgent AI copilot. I am reviewing scan findings for target **{scan.target}**.\n\n"
             f"Vulnerability Context Summary:\n{vuln_context or 'No vulnerabilities detected for this sandbox scan target.'}\n\n"
             "Please ask me details about any vulnerability, remediation steps, or ask for general code patches!"
         )
 
-    # Save assistant response to history
+    # Save assistant response to history (SIMULATED assistant output)
     assistant_chat = ChatHistory(scan_id=payload.scan_id, role="assistant", message=response)
     db.add(assistant_chat)
     db.commit()
@@ -96,13 +102,16 @@ def submit_chat_query(payload: ChatPayload, db: Session = Depends(get_db)):
         "scan_id": payload.scan_id,
         "role": "assistant",
         "message": response,
-        "created_at": assistant_chat.created_at
+        "created_at": assistant_chat.created_at,
+        "simulated": True,
     }
 
+
 @router.get("/history/{scan_id}")
-def get_chat_history(scan_id: int, db: Session = Depends(get_db)):
-    """Retrieves conversation thread logs for the security chat."""
-    history = db.query(ChatHistory).filter(ChatHistory.scan_id == scan_id).order_by(ChatHistory.created_at.ascii if hasattr(ChatHistory.created_at, 'ascii') else ChatHistory.created_at.asc()).all()
+def get_chat_history(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Retrieves conversation thread logs for a chat owned by the user."""
+    get_owned_scan(db, user, scan_id)
+    history = db.query(ChatHistory).filter(ChatHistory.scan_id == scan_id).order_by(ChatHistory.created_at.asc()).all()
     return [
         {
             "role": h.role,

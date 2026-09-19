@@ -377,3 +377,19 @@ recommendations from §9 and several "Phase 1" items. Status per finding:
 | §9 Phase 0 items 1–4 | All four completed (config bundle, requirements/env, migrations, dead files). |
 | §9 Phase 1 items 6–7 | Item 6 (completed_at) and item 7 (frontend API client) completed. Item 5 (real scanners behind `SIMULATION_MODE`) intentionally **NOT** done — out of Phase 1 scope. |
 | No Docker, no CI, no real auth/RBAC, no LLM/RAG, no World Monitor collectors, fake PDF | **NOT in Phase 1 scope.** Phases 2–5 remain open. |
+
+## 12. Phase 2 addendum (auth/RBAC/scope/adapters — completed 2026-09-19)
+
+Phase 2 (see `docs/PHASE_2_IMPLEMENTATION.md` and
+`docs/PHASE_2_REALITY_AUDIT.md`) implemented the §5.7/§5.9 "mock auth" corrections,
+RBAC + scope enforcement, and an honest scanner-adapter foundation. Status per finding:
+
+| Audit finding | Phase 2 disposition |
+|---|---|
+| §5.7 fake auth / always authenticated identity | **[PH2 DONE]** Real register/login/logout/me with PBKDF2-SHA256 password hashing and opaque hashed session tokens (stdlib only). No demo account is auto-created (`seed_defaults` is config-driven admin bootstrap). |
+| §5.7 user isolation | **[PH2 DONE]** Every user resolves through a per-user project (`users→projects→scans→children`); foreign resources return 404. Documented + tested (`test_authorization.py`). |
+| §5.7 "you are admin" hardcoding | **[PH2 DONE]** Roles `user`/`admin`; `/auth/users` + `/auth/admin/overview` behind `require_admin` (`test_rbac.py`). |
+| §5.9 mock Supabase auth + fake Settings UI | **[PH2 DONE]** `Auth.tsx` calls the real API; App auth is token-driven with automatic 401 logout; `DashboardLayout` shows the real `/auth/me` user; Settings placeholders are read-only and explicitly documented as unused. |
+| §5.5 scanners as simulated-only | **[PH2 PARTIAL]** Adapter foundation added with honest states (NOT INSTALLED/TIMEOUT/EXECUTION FAILED/PARSE FAILED), `shutil.which` availability, injection-safe list execution, honest Nuclei parsing. Live execution still requires binaries on PATH (absent on this host) — works as designed; no fabrication. |
+| §7 simulated PDF | **Documented** in the reality audit as a known limitation; real generator deferred. |
+| Unauthenticated `/scans/*` and `/reports/*` | **[PH2 DONE]** All formerly unauth endpoints now require a valid session; scope added via `/scans/scope`. |

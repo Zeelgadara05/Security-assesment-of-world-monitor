@@ -10,11 +10,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS is configuration-driven. No wildcard is combined with credentials.
+# CORS is configuration-driven. Credentials are allowed because login
+# sessions may be delivered via cookie; the origin list is explicit (no
+# wildcard), which keeps credentialed CORS safe.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -38,7 +40,7 @@ def read_root():
     return {
         "status": "online",
         "app": "CyberAgent",
-        "tagline": "Autonomous AI Security Copilot",
+        "tagline": "Security Assesment Tool",
         "docs": "/docs",
         "simulation_mode": settings.simulation_mode
     }

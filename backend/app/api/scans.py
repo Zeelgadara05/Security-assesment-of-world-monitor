@@ -3,22 +3,36 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
 import json
-import time
 from database.connection import get_db
-from database.models import Scan, Project, Vulnerability, ToolResult
-from database.schemas import ScanRequest
+from database.models import Scan, Project, Vulnerability, ToolResult, Asset
+from database.schemas import ScanRequest, normalize_target
+from app.core.auth import (
+    get_current_user,
+    get_or_create_user_project,
+    get_owned_scan,
+    is_target_in_scope,
+)
 from app.workers.tasks import trigger_background_scan
 from app.config import settings
+from database.models import User
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
+
 @router.post("/trigger")
-def trigger_scan(payload: ScanRequest, db: Session = Depends(get_db)):
-    """Triggers an autonomous security scan for a target domain or IP."""
-    # Fetch default sandbox project
-    project = db.query(Project).filter(Project.name == "Default Sandbox").first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Default Project Sandbox not initialized.")
+def trigger_scan(payload: ScanRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Triggers an authenticated scan for a target inside the user's scope."""
+    project = get_or_create_user_project(db, user)
+    assets = db.query(Asset).filter(Asset.project_id == project.id).all()
+
+    if not is_target_in_scope(payload.target, project, assets):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Target is outside the authorized scope for this project. "
+                "Add it to the project scope first (see /scans/scope)."
+            ),
+        )
 
     new_scan = Scan(
         project_id=project.id,
@@ -43,10 +57,20 @@ def trigger_scan(payload: ScanRequest, db: Session = Depends(get_db)):
         "created_at": new_scan.created_at
     }
 
+
 @router.get("/list")
-def list_scans(db: Session = Depends(get_db)):
-    """Retrieves all security scan records from the database."""
-    scans = db.query(Scan).order_by(Scan.created_at.desc()).all()
+def list_scans(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Retrieves scan records belonging to the authenticated user only."""
+    projects = db.query(Project).filter(Project.user_id == user.id).all()
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return []
+    scans = (
+        db.query(Scan)
+        .filter(Scan.project_id.in_(project_ids))
+        .order_by(Scan.created_at.desc())
+        .all()
+    )
     return [
         {
             "id": s.id,
@@ -59,12 +83,35 @@ def list_scans(db: Session = Depends(get_db)):
         for s in scans
     ]
 
+
+@router.get("/scope")
+def get_scope(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The authenticated user's authorized scan scope for their project."""
+    project = get_or_create_user_project(db, user)
+    return {
+        "project_id": project.id,
+        "project_name": project.name,
+        "scope": project.scope_json or [],
+    }
+
+
+@router.post("/scope")
+def add_scope_entry(payload: ScanRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Add one authorized target (domain / IPv4 / CIDR) to the user's scope."""
+    project = get_or_create_user_project(db, user)
+    scope = list(project.scope_json or [])
+    target = payload.target  # already normalized by ScanRequest
+    if target not in scope:
+        scope.append(target)
+        project.scope_json = scope
+        db.commit()
+    return {"project_id": project.id, "scope": scope, "added": target}
+
+
 @router.get("/{scan_id}/details")
-def get_scan_details(scan_id: int, db: Session = Depends(get_db)):
-    """Retrieves metadata and findings for a specific scan ID."""
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found.")
+def get_scan_details(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Retrieves metadata and findings for a scan owned by the user."""
+    scan = get_owned_scan(db, user, scan_id)
 
     vulnerabilities = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
     tool_results = db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
@@ -96,9 +143,21 @@ def get_scan_details(scan_id: int, db: Session = Depends(get_db)):
         "tools": [{"name": tr.tool_name, "status": tr.status} for tr in tool_results]
     }
 
+
 @router.get("/{scan_id}/stream")
-async def stream_scan_logs(scan_id: int, db: Session = Depends(get_db)):
-    """Server Sent Events (SSE) logs streaming endpoint for realtime UI tracking."""
+async def stream_scan_logs(
+    scan_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Server Sent Events (SSE) logs streaming endpoint for realtime UI tracking.
+
+    Communicated via a native EventSource, which cannot attach Authorization
+    headers, so the session token is also accepted through the ``token``
+    query parameter when present.
+    """
+    get_owned_scan(db, user, scan_id)
+
     async def log_generator():
         last_length = 0
         while True:
