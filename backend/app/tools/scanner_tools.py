@@ -16,6 +16,7 @@ Simulation remains a distinct, explicit mode: when ``simulation=True`` the
 adapters return deterministic synthetic markers (prefixed with [SIMULATED]
 upstream) and they must never be presented as real findings.
 """
+import os
 import subprocess
 import shutil
 import re
@@ -24,6 +25,62 @@ import time
 import logging
 
 logger = logging.getLogger("cyberagent.tools")
+
+
+def _expand_windows_env(value: str) -> str:
+    """Expand any ``%VAR%`` placeholders left in a registry Path value."""
+    if "%" not in value:
+        return value
+    try:
+        return os.path.expandvars(value)
+    except Exception:  # pragma: no cover - environment specific
+        return value
+
+
+def _system_path_entries() -> list[str]:
+    """User + Machine PATH entries persisted for this account (Windows only)."""
+    if os.name != "nt":
+        return []
+    import winreg
+
+    scopes = [
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ]
+    entries: list[str] = []
+    for hive, subkey in scopes:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, "Path")
+        except OSError:  # pragma: no cover - environment specific
+            continue
+        entries.extend(p for p in _expand_windows_env(value or "").split(os.pathsep) if p)
+    return entries
+
+
+def refresh_tool_path() -> None:
+    """Merge freshly-installed scanner dirs into this process's PATH.
+
+    ``os.environ["PATH"]`` is captured when the backend starts, so a scanner
+    installed *after* launch (whose bin dir is added to the User/Machine
+    PATH) stays invisible to ``shutil.which`` and ``subprocess`` until a
+    restart.  This also pulls in any directories listed in ``TOOL_PATH``.
+    Existing process PATH order is preserved; only missing entries are added.
+    """
+    extra: list[str] = _system_path_entries()
+    for raw in (os.getenv("TOOL_PATH", "") or "").split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            extra.append(raw)
+    current = os.environ.get("PATH", "").split(os.pathsep)
+    known = {p.rstrip("\\").lower() for p in current}
+    missing = [p for p in extra if p.rstrip("\\").lower() not in known]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join(missing + current)
+
+
+refresh_tool_path()
 
 # ---------------------------------------------------------------------------
 # Tool result states

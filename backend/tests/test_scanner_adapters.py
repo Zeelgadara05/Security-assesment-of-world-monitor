@@ -30,6 +30,29 @@ def test_sanitize_input_strips_shell_metacharacters():
     assert "example.com" in out
 
 
+def test_refresh_tool_path_merges_missing_entries_only(monkeypatch):
+    monkeypatch.setattr(scanner_tools, "_system_path_entries", lambda: [])
+    monkeypatch.setenv("PATH", r"D:\existing")
+    monkeypatch.setenv("TOOL_PATH", r"D:\new;D:\existing;E:\more")
+    scanner_tools.refresh_tool_path()
+    parts = scanner_tools.os.environ["PATH"].split(scanner_tools.os.pathsep)
+    assert parts[0] == r"D:\new"
+    assert r"D:\existing" in parts
+    assert r"E:\more" in parts
+    assert parts.count(r"D:\existing") == 1
+    assert parts.count(r"D:\new") == 1
+
+
+def test_refresh_tool_path_is_idempotent(monkeypatch):
+    monkeypatch.setattr(scanner_tools, "_system_path_entries", lambda: [])
+    monkeypatch.setenv("PATH", r"D:\only")
+    monkeypatch.setenv("TOOL_PATH", r"D:\only;D:\only")
+    scanner_tools.refresh_tool_path()
+    scanner_tools.refresh_tool_path()
+    parts = scanner_tools.os.environ["PATH"].split(scanner_tools.os.pathsep)
+    assert parts == [r"D:\only"]
+
+
 def test_not_installed_reported_and_never_faked(monkeypatch):
     monkeypatch.setattr(scanner_tools, "is_tool_installed", lambda binary: False)
     result = run_nmap("example.com", simulation=False)

@@ -10,6 +10,9 @@ Environment variables consumed:
   CORS_ORIGINS   Comma separated allowed CORS origins. Default: local dev Vite origins
   REDIS_URL      Broker URL (reserved for future Celery use). Default: redis://localhost:6379/0
   SESSION_TTL_HOURS  Login session lifetime in hours. Default: 12
+  TOOL_PATH      Extra scanner binary directories (PATH-separated), merged
+                 into the process PATH at import so scanners not on the
+                 system PATH are still detected. Default: empty.
   ADMIN_EMAIL    Bootstrap admin email. Only used when both ADMIN_EMAIL and
                  ADMIN_PASSWORD are set and ADMIN_DISABLED != "true".
   ADMIN_PASSWORD Bootstrap admin password (dev/self-host bootstrap only).
@@ -49,6 +52,11 @@ class Settings:
             self.session_ttl_hours = 12
         if self.session_ttl_hours < 1:
             self.session_ttl_hours = 12
+
+        # Extra scanner binary directories (PATH-separated). These are merged
+        # into the process PATH at import time by scanner_tools.refresh_tool_path()
+        # so tools not on the system PATH can still be detected and executed.
+        self.tool_path = [p.strip() for p in (os.getenv("TOOL_PATH", "") or "").split(os.pathsep) if p.strip()]
 
         # Bootstrap admin credentials. Never defaults to a real credential:
         # the admin is only created when *both* variables are explicitly set
