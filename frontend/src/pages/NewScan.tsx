@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { apiFetch, authUrl } from '../api';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { Button } from '../components/Button';
 import { Input } from '../components/Field';
@@ -39,6 +40,7 @@ const SEVERITIES = ['info', 'low', 'medium', 'high', 'critical'];
 const TOOL_GROUPS = ['Recon', 'DNS', 'Service', 'HTTP', 'Vulnerability'];
 
 export const NewScan: React.FC = () => {
+  const navigate = useNavigate();
   const [target, setTarget] = useState('');
   const [selectedTools, setSelectedTools] = useState<Record<string, boolean>>(
     Object.fromEntries(TOOLS.map((t) => [t.id, true]))
@@ -448,7 +450,7 @@ export const NewScan: React.FC = () => {
               </button>
             )}
             {(status === 'Completed' || status === 'Cancelled' || status === 'Failed') && (
-              <Button size="sm" onClick={() => (window.location.href = '/scans')}>
+              <Button size="sm" onClick={() => navigate('/scans')}>
                 Review findings
                 <ChevronRight className="w-3 h-3" aria-hidden="true" />
               </Button>
