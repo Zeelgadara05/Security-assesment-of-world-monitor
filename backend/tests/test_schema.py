@@ -11,7 +11,7 @@ from database.connection import engine, verify_schema
 from database.models import Base
 
 EXPECTED_TABLES = set(Base.metadata.tables.keys())
-HEAD_REVISION = "8b1f4d2a6c30"
+HEAD_REVISION = "a9f3e2d1c8b4"
 
 
 def test_all_models_mapped_to_tables():
@@ -28,6 +28,8 @@ def test_all_models_mapped_to_tables():
         "observations",
         "assessment_tests",
         "finding_evidence",
+        "finding_status_history",
+        "report_exports",
     }
 
 

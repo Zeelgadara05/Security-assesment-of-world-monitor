@@ -27,10 +27,24 @@ class ScanCreate(ScanRequest):
     ``tools`` toggles which scanners take part (default: all available),
     ``severity`` applies an analysis threshold (default: report everything),
     ``profile`` is an operator hint persisted for the record.
+    Phase 5/6 config keys are passed through to the assessment engine:
+    ``active_testing`` (opt-in mutating tests, default False),
+    ``assessment_engine`` (default True), plus optional evidence-carrying
+    inputs (auth identities, SSRF validation callback, JWT case data).
     """
     tools: dict[str, bool] | None = None
     severity: str | None = None
     profile: str | None = None
+    # Phase 5 assessment engine options.
+    active_testing: bool | None = None
+    assessment_engine: bool | None = None
+    auth_identities: dict | list | None = None
+    ssrf_validation_url: str | None = None
+    ssrf_token: str | None = None
+    jwt_tokens: list[str] | None = None
+    jwt_alg_none_accepted: bool | None = None
+    installed_tools: list[str] | None = None
+    tools_missing: list[str] | None = None
 
 
 def _create_and_enqueue(db: Session, user: User, target: str, config: dict | None = None) -> Scan:
@@ -88,6 +102,25 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_current_user), db:
         config["severity"] = payload.severity
     if payload.profile:
         config["profile"] = payload.profile
+    # Phase 5/6 config passthrough (only explicitly provided keys are set).
+    if payload.active_testing is not None:
+        config["active_testing"] = bool(payload.active_testing)
+    if payload.assessment_engine is not None:
+        config["assessment_engine"] = bool(payload.assessment_engine)
+    if payload.auth_identities is not None:
+        config["auth_identities"] = payload.auth_identities
+    if payload.ssrf_validation_url:
+        config["ssrf_validation_url"] = payload.ssrf_validation_url
+    if payload.ssrf_token:
+        config["ssrf_token"] = payload.ssrf_token
+    if payload.jwt_tokens is not None:
+        config["jwt_tokens"] = list(payload.jwt_tokens)
+    if payload.jwt_alg_none_accepted is not None:
+        config["jwt_alg_none_accepted"] = bool(payload.jwt_alg_none_accepted)
+    if payload.installed_tools is not None:
+        config["installed_tools"] = list(payload.installed_tools)
+    if payload.tools_missing is not None:
+        config["tools_missing"] = list(payload.tools_missing)
     if not config:
         config = None
 
@@ -343,6 +376,12 @@ def _finding_evidence(db: Session, finding_id: int) -> list[dict]:
             "actual": e.actual,
             "security_boundary": e.security_boundary,
             "redaction_status": e.redaction_status,
+            # Phase 6 evidence integrity metadata.
+            "request_hash": e.request_hash,
+            "response_hash": e.response_hash,
+            "original_size": e.original_size,
+            "captured_size": e.captured_size,
+            "truncated": e.truncated,
         }
         for e in rows
     ]
@@ -350,6 +389,8 @@ def _finding_evidence(db: Session, finding_id: int) -> list[dict]:
 
 def _vulnerability_dict(db: Session, v: Vulnerability) -> dict:
     """Serialize a finding including Phase 5 assessment fields and evidence."""
+    from app.assess import finding_lifecycle as lifecycle
+
     return {
         "id": v.id,
         "title": v.title,
@@ -378,6 +419,20 @@ def _vulnerability_dict(db: Session, v: Vulnerability) -> dict:
         "validation_reason": v.validation_reason,
         "impact": v.impact,
         "evidence_records": _finding_evidence(db, v.id),
+        # Phase 6 lifecycle + reporting fields.
+        "status": v.status or lifecycle.STATUS_CONFIRMED,
+        "affected_component": v.affected_component,
+        "parameter": v.parameter,
+        "cvss_version": v.cvss_version,
+        "cvss_vector": v.cvss_vector,
+        "cvss_score": v.cvss_score,
+        "business_impact": v.business_impact,
+        "technical_impact": v.technical_impact,
+        "impact_details": v.impact_details,
+        "remediation_details": v.remediation_details,
+        "fingerprint": v.fingerprint or v.dedup_key,
+        "first_seen": v.first_seen,
+        "last_seen": v.last_seen,
     }
 
 
@@ -551,6 +606,88 @@ async def stream_scan_events(
                 local_db.close()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{scan_id}/assessment")
+def get_scan_assessment(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Phase 6 assessment summary: coverage, aggregates, completeness, snapshot.
+
+    Describes the assessment performed (coverage %, executed/failed/skipped
+    tests, lifecycle aggregates), never a security verdict on the target.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    from app.assess import summary as assess_summary
+
+    coverage = _assessment_coverage(db, scan_id)
+    return assess_summary.summary_from_scan(db, scan, coverage)
+
+
+@router.get("/{scan_id}/report")
+def get_scan_report(
+    scan_id: int,
+    format: str = "json",
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Phase 6 report export (json|markdown).
+
+    The report is deterministic, built only from persisted state, and preserves
+    finding ids, evidence ids, coverage, limitations, the registry fingerprint
+    and timestamps.  Each export is recorded with a content hash for reproducibility.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    fmt = (format or "json").lower()
+    if fmt not in ("json", "markdown"):
+        raise HTTPException(status_code=400, detail="format must be 'json' or 'markdown'.")
+
+    from app.reporting import builder as report_builder
+    from app.reporting import export as report_export
+
+    report, markdown, json_payload, _rendered = report_builder.build(db, scan)
+
+    if fmt == "json":
+        payload = report_export.render_json(json_payload)
+        response = {
+            "format": "json",
+            "scan_id": scan.id,
+            "target": scan.target,
+            "generated_at": report.generated_at,
+            "registry_fingerprint": report.registry_fingerprint,
+            "config_fingerprint": report.config_fingerprint,
+            "content_hash": report_export.content_hash(payload),
+            "report": json_payload,
+        }
+        record_payload = payload
+        content_json = json_payload
+        content_markdown = None
+    else:
+        payload = report_export.render_markdown(markdown)
+        response = {
+            "format": "markdown",
+            "scan_id": scan.id,
+            "target": scan.target,
+            "generated_at": report.generated_at,
+            "registry_fingerprint": report.registry_fingerprint,
+            "config_fingerprint": report.config_fingerprint,
+            "content_hash": report_export.content_hash(payload),
+            "report": payload,
+        }
+        record_payload = payload
+        content_json = None
+        content_markdown = payload
+
+    report_export.persist_export(
+        db,
+        scan_id=scan.id,
+        fmt=fmt,
+        payload=record_payload,
+        content_json=content_json,
+        content_markdown=content_markdown,
+        registry_fingerprint=report.registry_fingerprint,
+        config_fingerprint=report.config_fingerprint,
+        user_id=str(getattr(user, "id", "")),
+    )
+    return response
 
 
 @router.get("/{scan_id}/stream")

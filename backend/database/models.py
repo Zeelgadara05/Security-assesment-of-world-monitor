@@ -175,8 +175,26 @@ class Vulnerability(Base):
     updated_at = Column(DateTime, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
 
+    # Phase 6 finding lifecycle + reporting (all optional/nullable).
+    # status: candidate|validated|confirmed|rejected|duplicate|accepted|remediated|reopened
+    status = Column(String(50), nullable=False, default="confirmed", index=True)
+    affected_component = Column(String(100), nullable=True)  # e.g. "backend/api", "tls", "oauth"
+    parameter = Column(String(255), nullable=True)
+    cvss_version = Column(String(10), nullable=True)  # "3.1" when a vector is present
+    cvss_vector = Column(String(255), nullable=True)  # full CVSS vector, never fabricated
+    cvss_score = Column(Float, nullable=True)  # deterministic base score derived from the vector
+    business_impact = Column(Text, nullable=True)
+    technical_impact = Column(Text, nullable=True)
+    impact_details = Column(JSON, nullable=True)  # structured technical/business impact factors
+    remediation_details = Column(JSON, nullable=True)  # summary/technical_fix/configuration_fix/validation_steps/regression_test
+    references_json = Column(JSON, nullable=True)  # deterministic reference list
+    fingerprint = Column(String(64), nullable=True, index=True)  # finding identity for dedup/control
+    first_seen = Column(DateTime, nullable=True)
+    last_seen = Column(DateTime, nullable=True)
+
     scan = relationship("Scan", back_populates="vulnerabilities")
     evidence_records = relationship("FindingEvidence", back_populates="finding", cascade="all, delete-orphan")
+    status_history = relationship("FindingStatusHistory", back_populates="finding", cascade="all, delete-orphan")
 
 
 class Observation(Base):
@@ -306,7 +324,58 @@ class FindingEvidence(Base):
     actual = Column(Text, nullable=True)
     security_boundary = Column(Text, nullable=True)
     redaction_status = Column(String(50), default="redacted")
+    # Phase 6 evidence integrity: hashes over the redacted payload so accidental
+    # mutation is detectable; bounded body capture metadata.
+    request_hash = Column(String(64), nullable=True)
+    response_hash = Column(String(64), nullable=True)
+    original_size = Column(Integer, nullable=True)  # observed response body size (bytes)
+    captured_size = Column(Integer, nullable=True)  # bytes actually persisted
+    truncated = Column(Boolean, nullable=True)  # True when the body was bounded
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     finding = relationship("Vulnerability", back_populates="evidence_records")
     observation = relationship("Observation")
+
+
+class FindingStatusHistory(Base):
+    """Immutable audit trail of a finding's lifecycle transitions.
+
+    Every status change (candidate -> confirmed -> remediated -> reopened, or any
+    manual triage transition) appends a row here.  Historical state is never
+    overwritten or deleted.
+    """
+    __tablename__ = "finding_status_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("vulnerabilities.id"), nullable=False, index=True)
+    from_status = Column(String(50), nullable=False)
+    to_status = Column(String(50), nullable=False)
+    actor = Column(String(255), nullable=False, default="system")
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+
+    finding = relationship("Vulnerability", back_populates="status_history")
+
+
+class ReportExport(Base):
+    """Persisted, reproducibility metadata for a generated assessment report.
+
+    The report body is regenerated deterministically from persisted state; this
+    row records what was generated, when, and against which assessment version
+    (registry + configuration fingerprints) so the report is reproducible.
+    """
+    __tablename__ = "report_exports"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    user_id = Column(String(255), nullable=True)
+    format = Column(String(20), nullable=False)  # json|markdown
+    content_hash = Column(String(64), nullable=True)  # SHA-256 of the rendered payload
+    registry_fingerprint = Column(String(64), nullable=True)
+    config_fingerprint = Column(String(64), nullable=True)
+    content_length = Column(Integer, nullable=True)
+    generated_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    content_json = Column(JSON, nullable=True)
+    content_markdown = Column(Text, nullable=True)
+
+    scan = relationship("Scan", back_populates="report_exports")

@@ -148,8 +148,16 @@ def run_assessment(db, scan, simulation: bool = True, config: dict | None = None
     """
     config = dict(config or {})
     if simulation:
+        from app.assess import summary as summary_mod
+
+        summary_mod.snapshot(db, scan, config, coverage=None)
+        db.commit()
         return {"executed": False, "reason": "simulation mode", "findings_confirmed": 0}
     if config.get("assessment_engine") is False:
+        from app.assess import summary as summary_mod
+
+        summary_mod.snapshot(db, scan, config, coverage=None)
+        db.commit()
         return {"executed": False, "reason": "assessment engine disabled", "findings_confirmed": 0}
 
     from app.assess import coverage as coverage_mod
@@ -168,17 +176,30 @@ def run_assessment(db, scan, simulation: bool = True, config: dict | None = None
     candidates = planner.confirmed_candidates(report, registry)
     candidates = _drop_existing(db, scan, candidates)
     finding_rows, finding_by_key = _persist_findings(db, scan, candidates, observation_rows, context.target)
+    _persist_external_candidates(db, scan)
     _persist_assessment_tests(db, scan, assessment_plan, report, registry, observation_rows, finding_by_key)
     coverage_summary = coverage_mod.summarize(assessment_plan, report, context)
     _persist_tool_result(db, scan, coverage_summary, len(observation_rows))
+
+    from app.assess import summary as summary_mod
+
+    coverage_dict = coverage_summary.to_dict()
+    summary_mod.snapshot(db, scan, config, coverage=coverage_dict)
     db.commit()
 
     return {
         "executed": True,
         "active_testing": active_testing,
-        "coverage": coverage_summary.to_dict(),
+        "coverage": coverage_dict,
         "findings_confirmed": coverage_summary.findings_confirmed,
         "statement": coverage_summary.findings_statement,
+        "assessment_status": scan.assessment_status,
+        "assessment_completeness": scan.assessment_completeness,
+        "headline": summary_mod.headline(
+            aggregate_counts=summary_mod.aggregate(db, scan),
+            coverage=coverage_dict,
+            status=scan.assessment_status,
+        ),
     }
 
 
@@ -224,13 +245,20 @@ def _drop_existing(db, scan, candidates):
 
 
 def _persist_findings(db, scan, candidates, observation_rows, target) -> tuple[list, dict]:
+    from app.assess import finding_lifecycle as lifecycle
+    from app.assess import profile
     from app.assess.evidence import summary as evidence_summary
     from database.models import Vulnerability
 
     index = _observation_index(observation_rows)
     finding_by_key: dict[str, int] = {}
     rows = []
+    now = datetime.datetime.utcnow()
     for candidate in candidates:
+        prof = profile.profile_finding(
+            category=candidate.category, severity=candidate.severity,
+            source_test=candidate.source_test, endpoint=candidate.endpoint,
+            source_tool=candidate.source_tool)
         row = Vulnerability(
             scan_id=scan.id,
             title=candidate.title,
@@ -248,20 +276,112 @@ def _persist_findings(db, scan, candidates, observation_rows, target) -> tuple[l
             category=candidate.category,
             endpoint=candidate.endpoint,
             http_method=candidate.method,
+            parameter=candidate.parameter,
             source_test=candidate.source_test,
             source_tool=candidate.source_tool,
             validation_reason=candidate.actual or "",
             impact=candidate.impact or None,
+            status=lifecycle.STATUS_CONFIRMED,
+            affected_component=prof["affected_component"],
+            impact_details=prof["impact_details"],
+            technical_impact=prof["impact_details"].get("technical"),
+            business_impact=prof["impact_details"].get("business"),
+            remediation_details=prof["remediation_details"],
+            references_json=None,
+            fingerprint=candidate.dedup_key,
+            first_seen=now,
+            last_seen=now,
             evidence=evidence_summary(candidate),
             evidence_observation_ids=[o["id"] for o in _matching_observations(index, candidate)],
-            created_at=datetime.datetime.utcnow(),
+            created_at=now,
         )
         db.add(row)
         db.flush()
+        lifecycle.record_initial(
+            db, row, reason=f"validated by {candidate.source_test or 'assessment engine'}")
         rows.append(row)
         finding_by_key[candidate.dedup_key] = row.id
         _persist_evidence(db, row, candidate, index)
     return rows, finding_by_key
+
+
+_ADAPTER_TOOLS = ("nmap", "nuclei", "httpx", "ffuf", "nikto", "sqlmap", "testssl")
+
+
+def _persist_external_candidates(db, scan) -> int:
+    """Surface external-tool vulnerability observations as *candidate* findings.
+
+    External adapters run independently of the native engine; their
+    ``vulnerability`` observations are real and recorded, but they have not been
+    confirmed by a native deterministic validator.  They are therefore persisted
+    with lifecycle status ``candidate`` -- never ``confirmed`` -- so the report
+    can surface them without overstating them.
+    """
+    from app.assess import finding_lifecycle as lifecycle
+    from app.observations import types
+    from database.models import Observation, Vulnerability
+
+    existing = {
+        v.dedup_key for v in db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).all()
+        if v.dedup_key
+    }
+    rows = (
+        db.query(Observation)
+        .filter(
+            Observation.scan_id == scan.id,
+            Observation.observation_type == types.OBS_VULNERABILITY,
+        )
+        .order_by(Observation.id.asc())
+        .all()
+    )
+
+    created = 0
+    now = datetime.datetime.utcnow()
+    for obs in rows:
+        tool = (obs.tool_name or "").lower()
+        if tool not in _ADAPTER_TOOLS:
+            continue
+        data = obs.data_json or {}
+        category = data.get("category") or data.get("cwe") or "external_tool"
+        subject = (obs.subject or scan.target)
+        severity = str(data.get("severity") or "Info").capitalize()
+        if severity not in ("Critical", "High", "Medium", "Low", "Info"):
+            severity = "Info"
+        dedup_key = f"external:{tool}:{normalize_endpoint(subject)}:{category}"
+        if dedup_key in existing:
+            continue
+        description = (
+            f"External tool `{tool}` reported a potential "
+            f"`{data.get('name') or data.get('template') or category}` issue. "
+            "This is a candidate finding surfaced from the external observation and "
+            "has not been re-validated by the native deterministic engine."
+        )
+        row = Vulnerability(
+            scan_id=scan.id,
+            title=f"{tool} candidate: {data.get('name') or data.get('template') or category}".strip(),
+            severity=severity,
+            description=description,
+            cwe=str(category) if category.startswith("CWE") else None,
+            target=obs.target or scan.target,
+            dedup_key=dedup_key,
+            confidence="MEDIUM",
+            state="NEW",
+            category=str(category),
+            endpoint=subject,
+            source_tool=tool,
+            validation_reason="external observation; not re-validated by native engine",
+            status=lifecycle.STATUS_CANDIDATE,
+            fingerprint=dedup_key,
+            first_seen=now,
+            last_seen=now,
+            created_at=now,
+        )
+        db.add(row)
+        db.flush()
+        existing.add(dedup_key)
+        lifecycle.record_initial(db, row, reason=f"candidate from external tool {tool}")
+        created += 1
+    return created
 
 
 def _persist_evidence(db, finding, candidate, index) -> None:

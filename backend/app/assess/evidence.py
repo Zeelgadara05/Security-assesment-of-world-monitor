@@ -1,17 +1,49 @@
-"""Structured evidence construction + persistence helpers (Phase 5).
+"""Structured evidence construction + persistence helpers (Phase 5/6).
 
 Every finding must retain enough redacted information to reproduce the
 reasoning: the request, the response, the expected vs actual security property,
-and the boundary that was crossed.
+and the boundary that was crossed.  Phase 6 adds integrity hashes over the
+redacted payload so accidental mutation of stored evidence is detectable, and
+bounded-capture metadata (original vs captured size, truncation flag) so
+response bodies are never stored unbounded.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from app.assess.models import CandidateData, EvidenceData
 from app.observations.normalize import redact_headers, redact_mapping, redact_text
 
 REDACTION_STATUS = "redacted"
+
+_MAX_EVIDENCE_BODY = 20000  # bounded capture: mirror the HTTP body store limit
+
+
+def payload_hash(payload: Any) -> str | None:
+    """SHA-256 over the canonical JSON of a payload (None in -> None out)."""
+    if payload is None:
+        return None
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def capture_metrics(payload: Any) -> dict[str, Any]:
+    """Bounded-capture metadata for a response payload.
+
+    ``original_size`` is the observed body size; ``captured_size`` is what was
+    persisted (never larger); ``truncated`` is True when data was dropped.  When
+    the body is not a plain string both sizes are None and ``truncated`` is None
+    (nothing was truncated).
+    """
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if not isinstance(body, str):
+        return {"original_size": None, "captured_size": None, "truncated": None}
+    total = len(body.encode("utf-8"))
+    if total <= _MAX_EVIDENCE_BODY:
+        return {"original_size": total, "captured_size": total, "truncated": False}
+    return {"original_size": total, "captured_size": _MAX_EVIDENCE_BODY, "truncated": True}
 
 
 def evidence_to_kwargs(finding_id: int, evidence: EvidenceData, observation_id: int | None = None) -> dict[str, Any]:
@@ -22,6 +54,7 @@ def evidence_to_kwargs(finding_id: int, evidence: EvidenceData, observation_id: 
     response = redact_mapping(evidence.response) if evidence.response else None
     if isinstance(response, dict) and isinstance(evidence.response, dict) and "headers" in evidence.response:
         response["headers"] = redact_headers(evidence.response.get("headers") or {})
+    metrics = capture_metrics(response)
     return {
         "finding_id": finding_id,
         "observation_id": observation_id,
@@ -32,6 +65,25 @@ def evidence_to_kwargs(finding_id: int, evidence: EvidenceData, observation_id: 
         "actual": redact_text(evidence.actual or ""),
         "security_boundary": redact_text(evidence.security_boundary or ""),
         "redaction_status": REDACTION_STATUS,
+        "request_hash": payload_hash(request),
+        "response_hash": payload_hash(response),
+        "original_size": metrics["original_size"],
+        "captured_size": metrics["captured_size"],
+        "truncated": metrics["truncated"],
+    }
+
+
+def verify_evidence_integrity(row) -> dict[str, bool]:
+    """Recompute the payload hashes of a persisted evidence row.
+
+    Returns ``{"request_ok": bool, "response_ok": bool}`` where False means the
+    stored payload no longer matches its stored hash (accidental mutation).
+    """
+    current_request = payload_hash(row.request_json)
+    current_response = payload_hash(row.response_json)
+    return {
+        "request_ok": current_request is None or current_request == row.request_hash,
+        "response_ok": current_response is None or current_response == row.response_hash,
     }
 
 
