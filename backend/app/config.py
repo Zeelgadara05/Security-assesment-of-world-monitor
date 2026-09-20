@@ -6,7 +6,7 @@ construction -- real credentials/keys must never be placed here.
 
 Environment variables consumed:
   DATABASE_URL   SQLAlchemy database URL.            Default: sqlite:///./cyberagent.db
-  SIMULATION_MODE Whether scans run in simulation.    Default: true
+  SIMULATION_MODE Whether scans run in simulation.    Default: false (real execution only)
   CORS_ORIGINS   Comma separated allowed CORS origins. Default: local dev Vite origins
   REDIS_URL      Broker URL (reserved for future Celery use). Default: redis://localhost:6379/0
   SESSION_TTL_HOURS  Login session lifetime in hours. Default: 12
@@ -37,7 +37,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     def __init__(self) -> None:
         self.database_url = os.getenv("DATABASE_URL", "sqlite:///./cyberagent.db")
-        self.simulation_mode = _env_bool("SIMULATION_MODE", True)
+        # Phase 7: scans execute real tools by default.  Simulation is an
+        # explicit, operator-chosen mode for sandboxed environments only --
+        # it must never be the silent default for a security platform.
+        self.simulation_mode = _env_bool("SIMULATION_MODE", False)
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
         # Preserve only origins actually required by the current frontend.

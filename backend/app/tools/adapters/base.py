@@ -63,6 +63,22 @@ class ToolParseError(ValueError):
     """Raised when a tool's stdout cannot be trusted as structured output."""
 
 
+class __Completed:
+    """Minimal stand-in for ``subprocess.CompletedProcess``.
+
+    The bounded runner does not materialize a ``CompletedProcess``; adapters'
+    ``extract_output`` only ever reads ``.stdout``, which this wrapper provides.
+    """
+
+    __slots__ = ("stdout", "stderr", "returncode")
+
+    def __init__(self, output: str = "", error: str = "",
+                 returncode: int | None = None) -> None:
+        self.stdout = output
+        self.stderr = error
+        self.returncode = returncode
+
+
 def safe_target(target: str) -> str:
     """Strip shell/control characters from a target without lossy URL mangling.
 
@@ -205,7 +221,7 @@ class ExternalToolAdapter:
 
     # --- execution ---------------------------------------------------------
     def run(self, target: str, *, simulation: bool = False,
-            options: dict | None = None) -> ToolRunResult:
+            options: dict | None = None, cancel_check=None) -> ToolRunResult:
         opts = dict(options or {})
         forbidden = FORBIDDEN_OPTIONS.intersection(opts)
         if forbidden:
@@ -232,43 +248,99 @@ class ExternalToolAdapter:
                 installed=False,
             )
         command = self.build_command(sanitized, opts)
+        return self._execute(command, opts, sanitized, cancel_check=cancel_check)
+
+    def _execute(self, command: list[str], opts: dict, sanitized: str,
+                 cancel_check=None) -> ToolRunResult:
+        """Invoke ``command``.
+
+        With a ``cancel_check`` callback (Phase 7) execution goes through
+        :class:`BoundedRunner` (bounded capture, cooperative cancellation, hard
+        timeout).  Without one the original ``subprocess.run`` contract is kept
+        verbatim -- including its ``exit_code``/``CompletedProcess`` surface
+        that existing consumers and tests rely on.
+        """
         started = time.monotonic()
-        try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True,
-                timeout=BINARY_TIMEOUT_SECONDS, shell=False,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolRunResult(
-                tool=self.tool_name, status=STATE_TIMEOUT, command=redact_command(command),
-                duration_ms=int((time.monotonic() - started) * 1000),
-                error=f"execution exceeded {BINARY_TIMEOUT_SECONDS}s", installed=True,
-            )
-        except FileNotFoundError:
-            return ToolRunResult(
-                tool=self.tool_name, status=STATE_NOT_INSTALLED, command=redact_command(command),
-                error=f"{self.binary} not found on PATH", installed=False,
-            )
-        except OSError as exc:  # pragma: no cover - environment specific
+        if cancel_check is None:
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, text=True,
+                    timeout=BINARY_TIMEOUT_SECONDS, shell=False,
+                )
+            except subprocess.TimeoutExpired:
+                return ToolRunResult(
+                    tool=self.tool_name, status=STATE_TIMEOUT, command=redact_command(command),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    error=f"execution exceeded {BINARY_TIMEOUT_SECONDS}s", installed=True,
+                )
+            except FileNotFoundError:
+                return ToolRunResult(
+                    tool=self.tool_name, status=STATE_NOT_INSTALLED, command=redact_command(command),
+                    error=f"{self.binary} not found on PATH", installed=False,
+                )
+            except OSError as exc:  # pragma: no cover - environment specific
+                return ToolRunResult(
+                    tool=self.tool_name, status=STATE_EXECUTION_FAILED,
+                    command=redact_command(command), error=str(exc), installed=True,
+                )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            stdout = self.extract_output(completed, opts)
+            return self._parse_result(stdout, sanitized, command,
+                                      duration_ms, completed.returncode)
+
+        from app.execution.runner import BoundedRunner
+
+        telemetry = BoundedRunner().run(
+            command, timeout=BINARY_TIMEOUT_SECONDS, cancel_check=cancel_check)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        redacted = redact_command(command)
+
+        if telemetry.error is not None:
+            if telemetry.error == "executable not found":
+                return ToolRunResult(
+                    tool=self.tool_name, status=STATE_NOT_INSTALLED,
+                    command=redacted, error=f"{self.binary} not found on PATH",
+                    installed=False,
+                )
             return ToolRunResult(
                 tool=self.tool_name, status=STATE_EXECUTION_FAILED,
-                command=redact_command(command), error=str(exc), installed=True,
+                command=redacted, error=telemetry.error,
+                raw_output=telemetry.stderr or telemetry.stdout,
+                duration_ms=duration_ms, installed=True,
             )
+        if telemetry.cancelled:
+            return ToolRunResult(
+                tool=self.tool_name, status=STATE_EXECUTION_FAILED,
+                command=redacted, error=telemetry.termination_reason
+                or "process terminated after cancellation request",
+                raw_output=telemetry.stderr or telemetry.stdout,
+                duration_ms=duration_ms, installed=True,
+            )
+        if telemetry.timed_out:
+            return ToolRunResult(
+                tool=self.tool_name, status=STATE_TIMEOUT,
+                command=redacted, error=telemetry.termination_reason
+                or f"execution exceeded {BINARY_TIMEOUT_SECONDS}s", installed=True,
+                duration_ms=duration_ms,
+            )
+        stdout = self.extract_output(__Completed(output=telemetry.stdout), opts)
+        return self._parse_result(stdout, sanitized, command,
+                                  duration_ms, telemetry.exit_code)
 
-        duration_ms = int((time.monotonic() - started) * 1000)
-        stdout = self.extract_output(completed, opts)
+    def _parse_result(self, stdout: str, sanitized: str, command: list[str],
+                      duration_ms: int, exit_code: int | None) -> ToolRunResult:
         try:
             observations = self.parse(stdout, sanitized)
         except ToolParseError as exc:
             return ToolRunResult(
                 tool=self.tool_name, status=STATE_PARSE_FAILED, observations=[],
                 raw_output=stdout, error=str(exc), command=redact_command(command),
-                duration_ms=duration_ms, exit_code=completed.returncode, installed=True,
+                duration_ms=duration_ms, exit_code=exit_code, installed=True,
             )
         return ToolRunResult(
             tool=self.tool_name, status=STATE_COMPLETED, observations=observations,
             raw_output=stdout, command=redact_command(command), duration_ms=duration_ms,
-            exit_code=completed.returncode, installed=True,
+            exit_code=exit_code, installed=True,
         )
 
     # --- helpers for parsers ----------------------------------------------

@@ -330,6 +330,36 @@ def _inject_real_probes(monkeypatch):
     monkeypatch.setattr(workflow.real_probes, "tcp_probe", fake_tcp)
     monkeypatch.setattr(workflow.real_probes, "http_probe", fake_http)
 
+    # The test is network-free by contract: stub the external CLIs too so a
+    # machine with the pentest tooling installed never actually hits the
+    # network (and never flips the scan into Partially Completed on tool
+    # timeout).  The real-mode *pipeline* is still fully exercised via the
+    # injected probe observations above.
+    monkeypatch.setattr(
+        workflow, "run_subfinder",
+        lambda target, simulation=True: {"status": "success", "subdomains": [], "log": "[subfinder] none"})
+    monkeypatch.setattr(
+        workflow, "run_assetfinder",
+        lambda target, simulation=True: {"status": "success", "subdomains": [], "log": "[assetfinder] none"})
+    monkeypatch.setattr(
+        workflow, "run_dnsx",
+        lambda target, subdomains=None, simulation=True: {"status": "success", "resolved": [], "log": "[dnsx] none"})
+    monkeypatch.setattr(
+        workflow, "run_nmap",
+        lambda target, simulation=True: {"status": "success", "ports": [], "log": "[nmap] none"})
+    monkeypatch.setattr(
+        workflow, "run_httpx",
+        lambda target, simulation=True: {"status": "success", "urls": [], "log": "[httpx] none"})
+    monkeypatch.setattr(
+        workflow, "run_gau",
+        lambda target, simulation=True: {"status": "success", "urls": [], "log": "[gau] none"})
+    monkeypatch.setattr(
+        workflow, "run_whatweb",
+        lambda target, simulation=True: {"status": "success", "techs": [], "log": "[whatweb] none"})
+    monkeypatch.setattr(
+        workflow, "run_nuclei",
+        lambda target, simulation=True: {"status": "success", "vulnerabilities": [], "log": "[nuclei] none"})
+
 
 def test_real_workflow_persists_observations_findings_and_downstream_report(monkeypatch, session):
     scan_id, target = _make_flow_scan(session)

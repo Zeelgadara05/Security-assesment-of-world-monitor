@@ -5,7 +5,12 @@ import asyncio
 import json
 import datetime
 from database.connection import get_db
-from database.models import Scan, Project, Vulnerability, ToolResult, Asset, Observation, AssessmentTest, FindingEvidence
+from database.models import (
+    Scan, Project, Vulnerability, ToolResult, Asset, Observation, AssessmentTest,
+    FindingEvidence, ToolReadiness, ToolExecution, ScanStage, MLInference,
+)
+from app.orchestration import events as phase7_events
+from app.orchestration import state as phase7_state
 from database.schemas import ScanRequest
 from app.core.auth import (
     get_current_user,
@@ -72,6 +77,8 @@ def _create_and_enqueue(db: Session, user: User, target: str, config: dict | Non
     db.add(new_scan)
     db.commit()
     db.refresh(new_scan)
+    new_scan.state = "created"  # Phase 7 state machine entry state
+    db.commit()
 
     # Launch scanning asynchronously. The simulation flag is driven by the
     # SIMULATION_MODE configuration boundary, never hardcoded here.
@@ -87,6 +94,12 @@ def _create_and_enqueue(db: Session, user: User, target: str, config: dict | Non
     _seed_progress(db, new_scan, new_scan.scan_config, simulation)
 
     trigger_background_scan(new_scan.id, simulation=simulation, config=new_scan.scan_config)
+
+    # Phase 7: record when the scan entered the worker queue so the pipeline
+    # can measure how long it sat in queue before a worker picked it up.
+    new_scan.queue_started_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(new_scan)
 
     return new_scan
 
@@ -735,3 +748,208 @@ async def stream_scan_logs(
                 local_db.close()
 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 execution-platform endpoints
+# ---------------------------------------------------------------------------
+@router.get("/{scan_id}/state")
+def get_scan_state(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Phase 7 state machine summary for a scan (+ legal next transitions)."""
+    scan = get_owned_scan(db, user, scan_id)
+    current = scan.state or phase7_state.CREATED
+    return {
+        "scan_id": scan.id,
+        "state": current,
+        "coarse_status": scan.status,
+        "stage": scan.stage or lifecycle.QUEUED,
+        "coarse_completion": phase7_state.coarse_completion(current),
+        "terminal": phase7_state.is_terminal(current),
+        "transitions": sorted(phase7_state.ALL)
+        if phase7_state.is_terminal(current)
+        else phase7_state.ALL,
+        "queue_waited_ms": scan.queue_waited_ms,
+        "updated_at": scan.updated_at,
+    }
+
+
+@router.get("/{scan_id}/stages")
+def get_scan_stages(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Real per-stage progress ledger for one scan."""
+    get_owned_scan(db, user, scan_id)
+    rows = db.query(ScanStage).filter(ScanStage.scan_id == scan_id).order_by(ScanStage.id.asc()).all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "order": r.order,
+            "status": r.status,
+            "reason": r.reason,
+            "tools": r.tools or [],
+            "tests_executed": r.tests_executed or 0,
+            "observations": r.observations or 0,
+            "candidates": r.candidates or 0,
+            "confirmed_findings": r.confirmed_findings or 0,
+            "errors": r.errors or {},
+            "duration_ms": r.duration_ms,
+            "started_at": r.started_at,
+            "finished_at": r.finished_at,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{scan_id}/executions")
+def get_scan_executions(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Real execution ledger: every tool attempt/skip with process telemetry."""
+    get_owned_scan(db, user, scan_id)
+    rows = db.query(ToolExecution).filter(ToolExecution.scan_id == scan_id).order_by(ToolExecution.id.asc()).all()
+    return [
+        {
+            "id": r.id,
+            "stage": r.stage,
+            "tool": r.tool,
+            "adapter": r.adapter,
+            "attempt": r.attempt,
+            "status": r.status,
+            "executable": r.executable,
+            "tool_version": r.tool_version,
+            "target": r.target,
+            "command_redacted": r.command_redacted,
+            "exit_code": r.exit_code,
+            "duration_ms": r.duration_ms,
+            "stdout_size": r.stdout_size,
+            "stderr_size": r.stderr_size,
+            "truncated": bool(r.stdout_truncated or r.stderr_truncated),
+            "parsed_observations": r.parsed_observations or 0,
+            "cancellation_state": r.cancellation_state,
+            "termination_reason": r.termination_reason,
+            "error_code": r.error_code,
+            "started_at": r.started_at,
+            "finished_at": r.finished_at,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{scan_id}/readiness")
+def get_scan_readiness(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Preflight snapshot: what was installed/disabled/missing when the scan ran."""
+    scan = get_owned_scan(db, user, scan_id)
+    rows = db.query(ToolReadiness).filter(ToolReadiness.scan_id == scan_id).order_by(ToolReadiness.id.asc()).all()
+    return {
+        "scan_id": scan.id,
+        "preflight": scan.preflight_json or {},
+        "tools": [
+            {
+                "tool": r.tool,
+                "status": r.status,
+                "executable": r.executable,
+                "version": r.version,
+                "adapter": r.adapter,
+                "category": r.category,
+                "enabled": bool(r.enabled),
+                "reason": r.reason,
+                "checked_at": r.checked_at,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/{scan_id}/typed-events")
+def get_scan_typed_events(
+    scan_id: int,
+    cursor: int = 0,
+    limit: int = 500,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Replay the ordered Phase 7 typed event stream from a cursor."""
+    get_owned_scan(db, user, scan_id)
+    if limit < 1 or limit > 2000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 2000.")
+    return phase7_events.replay(db, scan_id, cursor=cursor, limit=limit)
+
+
+@router.get("/{scan_id}/ml-advisory")
+def get_scan_ml_advisory(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The deterministic advisory-only record for a scan (no model predictions)."""
+    scan = get_owned_scan(db, user, scan_id)
+    row = (
+        db.query(MLInference)
+        .filter(MLInference.scan_id == scan_id)
+        .order_by(MLInference.id.desc())
+        .first()
+    )
+    if row is None:
+        return {"scan_id": scan.id, "advisory": None}
+    return {
+        "scan_id": scan.id,
+        "id": row.id,
+        "status": row.status,
+        "model_name": row.model_name,
+        "model_version": row.model_version,
+        "feature_schema_version": row.feature_schema_version,
+        "training_status": row.training_status,
+        "generated_at": row.generated_at,
+        "advisory": row.advisory_json,
+    }
+
+
+@router.get("/{scan_id}/compare")
+def compare_scans(
+    scan_id: int,
+    with_scan_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Cross-scan finding diff: added/removed/retained/reintroduced fingerprints."""
+    scan_a = get_owned_scan(db, user, scan_id)
+    scan_b = get_owned_scan(db, user, with_scan_id)
+    from app.assess import tracking
+
+    diff = tracking.compare(db, scan_a.id, scan_b.id)
+    diff["same_target"] = (scan_a.target or "").strip() == (scan_b.target or "").strip()
+    if not diff["same_target"]:
+        diff["note"] = "Scans have different targets; the diff compares raw fingerprints only."
+    return diff
+
+
+@router.post("/{scan_id}/retry")
+def retry_scan(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Re-enqueue a terminal scan for another run (evidence is preserved;
+    rule dedup prevents duplicate findings on re-assessment)."""
+    scan = get_owned_scan(db, user, scan_id)
+    current = scan.state or phase7_state.CREATED
+    if not phase7_state.is_terminal(current):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry a scan in non-terminal state {current!r}.",
+        )
+    if current != phase7_state.CANCELLED:
+        scan.state = phase7_state.CREATED
+    scan.stage = lifecycle.QUEUED
+    scan.status = "Pending"
+    scan.error = None
+    scan.completed_at = None
+    scan.cancelled_at = None
+    scan.queue_waited_ms = None
+    scan.queue_started_at = datetime.datetime.utcnow()
+    scan.preflight_json = None
+    scan.progress = lifecycle.empty_progress()
+    scan.logs = (scan.logs or "") + "[System] Retry requested; re-enqueuing for a new run...\n"
+    scan.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+    config = dict(scan.scan_config or {})
+    simulation = config.get("simulation", settings.simulation_mode)
+    trigger_background_scan(scan.id, simulation=simulation, config=config)
+    return {
+        "scan_id": scan.id,
+        "target": scan.target,
+        "status": scan.status,
+        "state": scan.state,
+        "stage": scan.stage,
+        "simulation": simulation,
+    }

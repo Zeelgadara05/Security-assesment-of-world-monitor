@@ -125,6 +125,8 @@ def build(db, scan) -> AssessmentReport:
     ]
 
     # --- sections -----------------------------------------------------------
+    phase7_trail = _phase7_trail(db, scan)
+    phase7_md = _phase7_trail_md(phase7_trail)
     sections = [
         ReportSection(id="executive_summary", title="Executive Summary",
                       content={"headline": headline, "status": status, "completeness": completeness,
@@ -142,6 +144,8 @@ def build(db, scan) -> AssessmentReport:
                       markdown=f"**Methodology.** {methodology()}\n\nRegistry fingerprint: `{registry_fingerprint or 'n/a'}`"),
         ReportSection(id="coverage", title="Coverage & Test Ledger",
                       content=coverage_payload(coverage), markdown=coverage_markdown(coverage, tests)),
+        ReportSection(id="execution_platform", title="Execution Platform & Stage Ledger",
+                      content=phase7_trail["execution"], markdown=phase7_md["execution"]),
         ReportSection(id="findings", title="Confirmed Findings",
                       content=confirmed_rendered,
                       markdown=_findings_md(db, confirmed)),
@@ -167,10 +171,13 @@ def build(db, scan) -> AssessmentReport:
                                "observation_count": observation_count,
                                "findings": [r["id"] for r in rendered]},
                       markdown=_reproducibility_md(registry_fingerprint, config_fingerprint, generated_at, observation_count, rendered)),
+        ReportSection(id="execution_ledger", title="Execution Ledger & Validations",
+                      content=phase7_trail["ledger"], markdown=phase7_md["ledger"]),
     ]
 
     json_payload = {
         "assessment_version": "phase6",
+        "execution_platform_version": "phase7",
         "scan_id": scan.id,
         "target": scan.target,
         "generated_at": generated_at,
@@ -184,6 +191,7 @@ def build(db, scan) -> AssessmentReport:
         "evidence": evidence_rows,
         "coverage": coverage_payload(coverage),
         "limitations": limit_statement,
+        "execution_trail": phase7_trail,
     }
 
     parts = []
@@ -308,6 +316,142 @@ def _reproducibility_md(registry_fp, config_fp, generated_at, observation_count,
         f"- **Observation rows reviewed:** {observation_count}\n"
         f"- **Finding ids:** {', '.join(str(r['id']) for r in rendered) or 'none'}"
     )
+
+
+def _phase7_trail(db, scan) -> dict:
+    """Deterministic execution-trail snapshot for one scan.
+
+    Reads persisted Phase 7 rows only (ordered by id) and never invents a
+    number: preflight/readiness, the stage ledger, the tool execution ledger,
+    validator verdicts and the advisory record.
+    """
+    from database.models import (FindingValidation, MLInference, ScanStage,
+                                 ToolExecution, ToolReadiness)
+
+    preflight = scan.preflight_json or {}
+    stages = [
+        {
+            "name": s.name, "order": s.order, "status": s.status,
+            "tools": list(s.tools or []), "tests_executed": s.tests_executed or 0,
+            "observations": s.observations or 0, "candidates": s.candidates or 0,
+            "confirmed_findings": s.confirmed_findings or 0,
+            "errors": s.errors or {}, "duration_ms": s.duration_ms,
+        }
+        for s in db.query(ScanStage).filter(ScanStage.scan_id == scan.id)
+        .order_by(ScanStage.id.asc()).all()
+    ]
+    readiness = [
+        {
+            "tool": r.tool, "status": r.status, "executable": r.executable,
+            "version": r.version, "adapter": r.adapter, "category": r.category,
+            "enabled": bool(r.enabled), "reason": r.reason,
+        }
+        for r in db.query(ToolReadiness).filter(ToolReadiness.scan_id == scan.id)
+        .order_by(ToolReadiness.id.asc()).all()
+    ]
+    executions = [
+        {
+            "tool": e.tool, "stage": e.stage, "adapter": e.adapter, "attempt": e.attempt,
+            "status": e.status, "duration_ms": e.duration_ms,
+            "parsed_observations": e.parsed_observations or 0,
+            "cancellation_state": e.cancellation_state,
+            "termination_reason": e.termination_reason, "exit_code": e.exit_code,
+        }
+        for e in db.query(ToolExecution).filter(ToolExecution.scan_id == scan.id)
+        .order_by(ToolExecution.id.asc()).all()
+    ]
+    validations = [
+        {
+            "finding_id": v.finding_id, "validator_id": v.validator_id, "status": v.status,
+            "condition": v.condition, "reason": v.reason, "observation_id": v.observation_id,
+        }
+        for v in db.query(FindingValidation).filter(FindingValidation.scan_id == scan.id)
+        .order_by(FindingValidation.id.asc()).all()
+    ]
+    validation_stats: dict[str, int] = {}
+    for v in validations:
+        validation_stats[v["status"]] = validation_stats.get(v["status"], 0) + 1
+
+    ml = (
+        db.query(MLInference).filter(MLInference.scan_id == scan.id)
+        .order_by(MLInference.id.desc()).first()
+    )
+    advisory = None
+    if ml is not None:
+        advisory = {
+            "status": ml.status, "model_name": ml.model_name,
+            "feature_schema_version": ml.feature_schema_version,
+            "generated_at": ml.generated_at.isoformat() if ml.generated_at else None,
+        }
+
+    return {
+        "execution": {
+            "preflight": preflight,
+            "readiness": readiness,
+            "stages": stages,
+            "stage_status_bucket": _bucket(stages, "status"),
+        },
+        "ledger": {
+            "executions": executions,
+            "execution_status_bucket": _bucket(executions, "status"),
+            "validations": validations,
+            "validation_status_bucket": validation_stats,
+            "advisory": advisory,
+        },
+    }
+
+
+def _bucket(rows: list[dict], key: str) -> dict:
+    out: dict[str, int] = {}
+    for r in rows:
+        out[r.get(key)] = out.get(r.get(key), 0) + 1
+    return out
+
+
+def _phase7_trail_md(trail: dict) -> dict:
+    execution = trail["execution"]
+    ledger = trail["ledger"]
+    pre = execution["preflight"] or {}
+
+    ex_lines = [
+        f"- **Preflight:** blocked={bool(pre.get('blocked_reasons'))} • "
+        f"installed={', '.join(sorted(pre.get('installed') or [])) or 'none'} • "
+        f"missing={', '.join(sorted(pre.get('missing') or [])) or 'none'} • "
+        f"disabled={', '.join(sorted(pre.get('disabled') or [])) or 'none'}",
+        f"- **Stages:** {', '.join('{} ({})'.format(s['name'], s['status']) for s in execution['stages']) or 'none (phase7 pipeline not used)'}",
+    ]
+    ex_md = "\n".join(ex_lines)
+
+    ledger_lines = [
+        "| tool | stage | status | attempts | parsed | duration_ms |",
+        "|------|-------|--------|----------|--------|-------------|",
+    ]
+    for e in ledger["executions"]:
+        ledger_lines.append(
+            f"| {e['tool']} | {e['stage']} | {e['status']} | {e['attempt']} | "
+            f"{e['parsed_observations']} | {e['duration_ms']} |"
+        )
+    if not ledger["executions"]:
+        ledger_lines.append("| _no phase 7 tool executions recorded_ |")
+
+    val_stats = " • ".join(f"{k}:{v}" for k, v in sorted(ledger["validation_status_bucket"].items()))
+    ledger_lines += [
+        "",
+        f"- **Validator verdicts:** {val_stats or 'none'}",
+    ]
+    confirmed_rows = [v for v in ledger["validations"] if v["status"] == "confirmed"]
+    if confirmed_rows:
+        ledger_lines.append(
+            "- **Confirmed finding F- ids (deterministic validation):** "
+            + ", ".join("F-%d" % v["finding_id"] for v in confirmed_rows if v["finding_id"])
+        )
+    if ledger["advisory"]:
+        adv = ledger["advisory"]
+        ledger_lines.append(
+            f"- **Advisory record:** {adv['status']} (schema {adv['feature_schema_version']}; "
+            f"no model prediction used)"
+        )
+    return {"execution": ex_md, "ledger": "\n".join(ledger_lines)}
 
 
 __all__ = ["build", "remediation_aggregate"]

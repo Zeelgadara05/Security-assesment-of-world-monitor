@@ -103,6 +103,17 @@ class Scan(Base):
     assessment_completeness = Column(String(50), nullable=True)  # complete|partial|minimal|unknown
     assessment_snapshot_json = Column(JSON, nullable=True)  # config snapshot + reproducibility metadata
 
+    # Phase 7 execution-platform state machine (created|queued|preflight|running|
+    # validating|finalizing|completed|completed_with_gaps|blocked|failed|cancelled).
+    state = Column(String(50), nullable=True, index=True)
+    preflight_json = Column(JSON, nullable=True)  # real tool-readiness snapshot (never fabricated)
+    queue_started_at = Column(DateTime, nullable=True)
+    queue_waited_ms = Column(Integer, nullable=True)
+
+    executions = relationship("ToolExecution", back_populates="scan", cascade="all, delete-orphan")
+    scan_stages = relationship("ScanStage", back_populates="scan", cascade="all, delete-orphan")
+    scan_events = relationship("ScanEvent", back_populates="scan", cascade="all, delete-orphan")
+
 
 class ToolResult(Base):
     """Per-tool execution record.
@@ -191,6 +202,11 @@ class Vulnerability(Base):
     fingerprint = Column(String(64), nullable=True, index=True)  # finding identity for dedup/control
     first_seen = Column(DateTime, nullable=True)
     last_seen = Column(DateTime, nullable=True)
+
+    # Phase 7 cross-scan tracking (which scan first/last observed this finding).
+    first_scan_id = Column(Integer, nullable=True)
+    last_scan_id = Column(Integer, nullable=True)
+    occurrence_count = Column(Integer, nullable=True, default=1)
 
     scan = relationship("Scan", back_populates="vulnerabilities")
     evidence_records = relationship("FindingEvidence", back_populates="finding", cascade="all, delete-orphan")
@@ -379,3 +395,202 @@ class ReportExport(Base):
     content_markdown = Column(Text, nullable=True)
 
     scan = relationship("Scan", back_populates="report_exports")
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 execution platform
+#
+# These tables give a scan a full, honest execution trail: what preflight
+# found (ToolReadiness), how every tool actually ran (ToolExecution), which
+# stage of the pipeline it belonged to (ScanStage), the typed event stream
+# (ScanEvent), every deterministic validator verdict (FindingValidation), the
+# finding <-> observation linkage used for provenance (FindingObservationLink)
+# and the advisory record (MLInference).  Nothing in here is ever fabricated:
+# a row is only written after the real artifact it describes happened.
+# ---------------------------------------------------------------------------
+class ToolReadiness(Base):
+    """Real preflight result for one tool on one scan.
+
+    ``status`` is one of: installed | missing | disabled | adapter_unavailable.
+    ``executable``/``version`` come from real PATH/version probes (see
+    app.tools.inventory); a missing binary is recorded as missing, never as
+    available.  This is the readiness answer the pipeline gates on.
+    """
+    __tablename__ = "tool_readiness"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    tool = Column(String(50), nullable=False)
+    status = Column(String(50), nullable=False)  # installed|missing|disabled|adapter_unavailable
+    executable = Column(String(500), nullable=True)
+    version = Column(String(200), nullable=True)
+    adapter = Column(String(50), nullable=True)  # external|legacy|probe|none
+    category = Column(String(50), nullable=True)  # recon|dns|service|http|vulnerability|probe
+    enabled = Column(Boolean, default=True)  # operator requested this tool
+    reason = Column(String(255), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    checked_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan")
+
+
+class ToolExecution(Base):
+    """One real attempt (or skip) of an external tool on a scan.
+
+    Holds process telemetry that ToolResult does not: exact redacted command,
+    bounded output sizes (stdout/stderr are never stored unbounded here), how
+    many parsed observations the run produced, cancellation state and the
+    attempt index inside a bounded retry loop.  ``status`` is terminal and
+    honest: completed | failed | timeout | not_installed | parse_failed |
+    skipped | cancelled.
+    """
+    __tablename__ = "tool_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    stage = Column(String(50), nullable=False)  # Phase 7 pipeline stage name
+    tool = Column(String(50), nullable=False)
+    adapter = Column(String(50), nullable=True)  # adapter implementation used
+    attempt = Column(Integer, nullable=False, default=1)
+    status = Column(String(50), nullable=False, default="queued")
+    executable = Column(String(500), nullable=True)
+    tool_version = Column(String(200), nullable=True)
+    target = Column(String(255), nullable=True)
+    command_redacted = Column(Text, nullable=True)
+    exit_code = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    stdout_size = Column(Integer, nullable=True)
+    stderr_size = Column(Integer, nullable=True)
+    stdout_truncated = Column(Boolean, default=False)
+    stderr_truncated = Column(Boolean, default=False)
+    parsed_observations = Column(Integer, default=0)
+    cancellation_state = Column(String(50), nullable=True)  # request sent|terminated|observed
+    termination_reason = Column(String(255), nullable=True)
+    error_code = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="executions")
+
+
+class ScanStage(Base):
+    """Progress ledger for one Phase 7 pipeline stage on one scan.
+
+    ``status`` is queued|running|completed|failed|skipped|blocked.  Counters are
+    real increments observed by the pipeline; a stage with no work can never
+    report completed tool runs.
+    """
+    __tablename__ = "scan_stages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    name = Column(String(50), nullable=False)  # Phase 7 stage name (PRECHECK, ...)
+    order = Column(Integer, nullable=False, default=0)
+    status = Column(String(50), nullable=False, default="queued")
+    reason = Column(Text, nullable=True)
+    tools = Column(JSON, nullable=True)  # tool names planned for this stage
+    tests_executed = Column(Integer, nullable=True, default=0)
+    observations = Column(Integer, nullable=True, default=0)
+    candidates = Column(Integer, nullable=True, default=0)
+    confirmed_findings = Column(Integer, nullable=True, default=0)
+    errors = Column(JSON, nullable=True)  # {tool: [error strings]} real failures only
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="scan_stages")
+
+
+class ScanEvent(Base):
+    """Ordered, typed event stream for a scan (Phase 7 live dashboarding).
+
+    Each row is a real, completed event: state transitions, stage lifecycle,
+    tool start/finish, preflight results, coverage/progress changes, candidate
+    and validated-finding updates, and the terminal resolution.  The stream is
+    append-only and id-ordered so a client can replay from any cursor.
+    """
+    __tablename__ = "scan_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)  # state|stage|tool|preflight|coverage|finding|validation|done|error
+    data = Column(JSON, nullable=True)
+    seq = Column(Integer, nullable=False, default=0)  # monotonic per-scan counter
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+
+    scan = relationship("Scan", back_populates="scan_events")
+
+
+class FindingValidation(Base):
+    """One deterministic validator verdict for a finding candidate.
+
+    Written alongside finding persistence: every candidate that reached a
+    validator is recorded (confirmed or rejected), with the validator id, the
+    security property/condition that was checked, and the exact reason.  This
+    makes the "found then re-checked" chain auditable end to end.
+    """
+    __tablename__ = "finding_validations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("vulnerabilities.id"), nullable=True)  # present when confirmed
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    validator_id = Column(String(100), nullable=False)  # e.g. "injection.xss.reflected"
+    status = Column(String(50), nullable=False)  # confirmed | rejected
+    condition = Column(Text, nullable=True)  # security property that was checked
+    reason = Column(Text, nullable=True)
+    expected = Column(Text, nullable=True)
+    actual = Column(Text, nullable=True)
+    security_boundary = Column(Text, nullable=True)
+    confidence = Column(String(20), nullable=True)
+    observation_id = Column(Integer, ForeignKey("observations.id"), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan")
+    finding = relationship("Vulnerability")
+
+
+class FindingObservationLink(Base):
+    """Explicit finding <-> observation provenance edge (Phase 7).
+
+    Backs the JSON ``evidence_observation_ids`` list with a first-class
+    relation so provenance is joinable and never accidentally dropped.
+    """
+    __tablename__ = "finding_observation_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("vulnerabilities.id"), nullable=False, index=True)
+    observation_id = Column(Integer, ForeignKey("observations.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    finding = relationship("Vulnerability")
+    observation = relationship("Observation")
+
+
+class MLInference(Base):
+    """Advisory record for one scan.
+
+    This platform ships no model, so ``status`` is always ``advisory_only`` and
+    the payload is the deterministic coverage-gap advisory produced by
+    app.ml.advisory.  The row marks explicitly that no model prediction entered
+    the pipeline -- an ML layer can never silently upgrade evidence.
+    """
+    __tablename__ = "ml_inferences"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    model_name = Column(String(100), nullable=True)  # None: no model in play
+    model_version = Column(String(100), nullable=True)
+    model_type = Column(String(50), nullable=True)  # None → deterministic baseline
+    feature_schema_version = Column(String(50), nullable=True)
+    training_status = Column(String(50), nullable=True)  # none|untrained|trained
+    input_source = Column(String(50), nullable=True)  # persisted scan state
+    status = Column(String(50), nullable=False, default="advisory_only")
+    advisory_json = Column(JSON, nullable=True)
+    generated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan")

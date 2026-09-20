@@ -175,9 +175,18 @@ def trigger_background_scan(scan_id: int, simulation: bool = True, config: dict 
 
     logger.info(f"Scan {scan_id} enqueued on in-process worker.")
     try:
-        future = executor.submit(orchestrate_scan, scan_id, simulation=simulation, config=config)
+        from app.orchestration import orchestrate_scan_phase7
+
+        if simulation:
+            runner = orchestrate_scan
+        else:
+            # Real scans run through the Phase 7 execution platform; the legacy
+            # orchestrator remains the simulation path so its tested behaviour
+            # (and SSE contract) is preserved verbatim.
+            runner = orchestrate_scan_phase7
+        future = executor.submit(runner, scan_id, simulation=simulation, config=config)
         # Hold the future+job pairing: the job survives via registry; the
-        # thread identity is captured lazily by orchestrate_scan.
+        # thread identity is captured lazily by the orchestrator.
         future.add_done_callback(lambda _f: registry.unregister(scan_id))
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(f"Failed to enqueue scan {scan_id}: {exc}")
