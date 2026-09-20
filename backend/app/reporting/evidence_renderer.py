@@ -25,6 +25,7 @@ def render_evidence(db, finding) -> list[dict[str, Any]]:
         integrity = verify_evidence_integrity(e)
         out.append({
             "evidence_id": e.id,
+            "finding_id": finding.id,
             "observation_id": e.observation_id,
             "evidence_type": e.evidence_type,
             "expected": e.expected,

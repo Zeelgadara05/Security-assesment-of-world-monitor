@@ -47,6 +47,7 @@ export const NewScan: React.FC = () => {
   );
   const [severity, setSeverity] = useState<string>('');
   const [profile, setProfile] = useState<string>('standard');
+  const [activeTesting, setActiveTesting] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [scanId, setScanId] = useState<number | null>(null);
@@ -131,6 +132,7 @@ export const NewScan: React.FC = () => {
           tools: selectedTools,
           severity: severity || null,
           profile: profile || null,
+          active_testing: activeTesting,
         }),
       });
 
@@ -327,6 +329,22 @@ export const NewScan: React.FC = () => {
                 ))}
               </Select>
             </div>
+
+            <label className="flex items-start gap-2 border border-line rounded px-2.5 py-2 cursor-pointer transition-colors hover:bg-surface-2/60">
+              <input
+                type="checkbox"
+                checked={activeTesting}
+                onChange={(e) => setActiveTesting(e.target.checked)}
+                disabled={loading}
+                className="mt-0.5 accent-accent"
+              />
+              <span className="leading-tight">
+                <span className="block text-[11px] font-medium text-text">Active (mutating) testing</span>
+                <span className="block text-[10px] text-faint">
+                  Opt-in: sends crafted comparison requests against scope-guarded endpoints. Off by default.
+                </span>
+              </span>
+            </label>
 
             {error && (
               <div className="flex gap-2 border border-critical/40 bg-critical/10 rounded px-3 py-2.5 text-[11px] text-critical">

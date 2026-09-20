@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   ChevronRight,
   RotateCw,
+  FileDown,
 } from 'lucide-react';
 import { apiFetch, authUrl } from '../api';
 import { PageHeader } from '../components/PageHeader';
@@ -29,6 +30,28 @@ const STAGES = [
   { id: 'reporting', label: 'Reporting' },
 ];
 
+const LIFECYCLE_STATUSES = [
+  'confirmed',
+  'candidate',
+  'validated',
+  'rejected',
+  'duplicate',
+  'accepted',
+  'remediated',
+  'reopened',
+];
+
+const LIFECYCLE_TONES: Record<string, string> = {
+  candidate: 'text-faint',
+  validated: 'text-accent',
+  confirmed: 'text-critical',
+  rejected: 'text-faint',
+  duplicate: 'text-faint',
+  accepted: 'text-medium',
+  remediated: 'text-accent',
+  reopened: 'text-medium',
+};
+
 export const Scans: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [selectedScan, setSelectedScan] = useState<any | null>(null);
@@ -41,6 +64,11 @@ export const Scans: React.FC = () => {
   const [expandedVuln, setExpandedVuln] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [liveEvents, setLiveEvents] = useState<string[]>([]);
+  const [assessmentSummary, setAssessmentSummary] = useState<any | null>(null);
+  const [findingStatusFilter, setFindingStatusFilter] = useState<string>('all');
+  const [findingDetails, setFindingDetails] = useState<Record<number, any>>({});
+  const [reportExport, setReportExport] = useState<{ markdown: string; hash: string; generated_at: string } | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
 
@@ -67,6 +95,10 @@ export const Scans: React.FC = () => {
     setLiveEvents([]);
     setDetailsLoading(true);
     setDetailError('');
+    setFindingStatusFilter('all');
+    setFindingDetails({});
+    setAssessmentSummary(null);
+    setReportExport(null);
     try {
       const res = await apiFetch(`/scans/${id}`);
       if (res.ok) {
@@ -84,6 +116,53 @@ export const Scans: React.FC = () => {
       setDetailError('Server connection failed.');
     } finally {
       setDetailsLoading(false);
+    }
+    try {
+      const res = await apiFetch(`/scans/${id}/assessment`);
+      if (res.ok) setAssessmentSummary(await res.json());
+    } catch (err) {
+      console.error('Error fetching assessment summary:', err);
+    }
+  };
+
+  const loadFindingDetail = async (id: number) => {
+    if (findingDetails[id]) return;
+    try {
+      const res = await apiFetch(`/findings/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFindingDetails((prev) => ({ ...prev, [id]: data }));
+      }
+    } catch (err) {
+      console.error('Error fetching finding detail:', err);
+    }
+  };
+
+  const handleToggleVuln = (id: number) => {
+    const next = expandedVuln === id ? null : id;
+    setExpandedVuln(next);
+    if (next !== null) loadFindingDetail(id);
+  };
+
+  const handleExportReport = async () => {
+    if (!selectedScan) return;
+    setReportLoading(true);
+    try {
+      const res = await apiFetch(`/scans/${selectedScan.id}/report?format=markdown`);
+      if (res.ok) {
+        const data = await res.json();
+        setReportExport({
+          markdown: data.report || '',
+          hash: data.content_hash || '',
+          generated_at: data.generated_at || '',
+        });
+      } else {
+        setLiveEvents((prev) => [...prev, '[Error] Report export failed.']);
+      }
+    } catch {
+      setLiveEvents((prev) => [...prev, '[Error] Report export failed: server unreachable.']);
+    } finally {
+      setReportLoading(false);
     }
   };
 
@@ -184,6 +263,10 @@ export const Scans: React.FC = () => {
   const isActive = (idx: number) => !terminalStage && idx === currentStageIdx;
   const isDone = (idx: number) => idx < lastInclusive;
   const notInstalledTools = tools.filter((t) => (t.status || '').toLowerCase() === 'not installed').length;
+  const filteredVulnerabilities =
+    findingStatusFilter === 'all'
+      ? vulnerabilities
+      : vulnerabilities.filter((v) => (v.status || 'confirmed').toLowerCase() === findingStatusFilter);
   const canCancel =
     selectedScan &&
     (selectedScan.status === 'Running' || selectedScan.status === 'Pending' || selectedScan.status === 'Cancelling…') &&
@@ -350,7 +433,7 @@ export const Scans: React.FC = () => {
                   )}
                 </div>
 
-                {/* Phase 5 assessment coverage */}
+                {/* Phase 6 assessment + completeness */}
                 {selectedScan.assessment?.coverage && (
                   <div className="panel rounded-md p-4">
                     <div className="flex items-center justify-between mb-3">
@@ -359,21 +442,90 @@ export const Scans: React.FC = () => {
                         {selectedScan.assessment.coverage.findings_confirmed ?? 0} confirmed finding(s)
                       </span>
                     </div>
+
+                    {assessmentSummary?.headline && (
+                      <div
+                        className={`mb-3 border rounded px-3 py-2 text-[11px] ${
+                          assessmentSummary.assessment_status === 'completed'
+                            ? 'border-accent/30 bg-accent/5 text-accent'
+                            : 'border-warn/30 bg-warn/5 text-medium'
+                        }`}
+                      >
+                        {assessmentSummary.headline}
+                      </div>
+                    )}
+
+                    {(assessmentSummary || assessmentSummary?.aggregate) && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                        <KV
+                          label="Assessment status"
+                          value={assessmentSummary.assessment_status?.replaceAll('_', ' ') || '—'}
+                          mono
+                        />
+                        <KV label="Completeness" value={assessmentSummary.assessment_completeness || '—'} mono />
+                        <KV
+                          label="Tests executed"
+                          value={`${selectedScan.assessment.coverage.tests_executed ?? 0}/${selectedScan.assessment.coverage.tests_applicable ?? 0}`}
+                          mono
+                        />
+                        <KV label="Observed findings" value={String(selectedScan.assessment.coverage.observations ?? 0)} mono />
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
                       <KV label="Coverage" value={`${selectedScan.assessment.coverage.coverage_percent ?? '—'}%`} mono />
-                      <KV
-                        label="Tests executed"
-                        value={`${selectedScan.assessment.coverage.tests_executed ?? 0}/${selectedScan.assessment.coverage.tests_applicable ?? 0}`}
-                        mono
-                      />
                       <KV label="Not applicable" value={String(selectedScan.assessment.coverage.tests_not_applicable ?? 0)} mono />
-                      <KV label="Observations" value={String(selectedScan.assessment.coverage.observations ?? 0)} mono />
+                      <KV label="Failed" value={String(selectedScan.assessment.coverage.tests_failed ?? 0)} mono />
+                      <KV label="Skipped" value={String(selectedScan.assessment.coverage.tests_skipped ?? 0)} mono />
                     </div>
+
+                    {assessmentSummary?.aggregate && (
+                      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                        {Object.entries(assessmentSummary.aggregate.by_status || {}).map(
+                          ([status, count]) =>
+                            (count as number) > 0 && (
+                              <span
+                                key={status}
+                                className={`mono-cell text-[10px] border border-line rounded px-2 py-0.5 ${
+                                  LIFECYCLE_TONES[status] || 'text-faint'
+                                }`}
+                              >
+                                {status}: {count as number}
+                              </span>
+                            )
+                        )}
+                      </div>
+                    )}
+
                     {selectedScan.assessment.coverage.findings_confirmed === 0 && (
                       <p className="text-[10.5px] text-faint mb-2">
                         Zero confirmed findings is not the same as zero risk. Unevaluated areas are listed below.
                       </p>
                     )}
+
+                    {(assessmentSummary?.snapshot?.configuration?.tools_missing?.length ?? 0) > 0 && (
+                      <div className="mb-3 border border-warn/30 bg-warn/5 rounded px-3 py-2">
+                        <p className="eyebrow mb-1">Assessment gaps — tools not installed</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(assessmentSummary.snapshot.configuration.tools_missing as string[]).map((t) => (
+                            <span key={t} className="mono-cell text-[10px] text-medium">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {assessmentSummary?.snapshot?.configuration && (
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3 text-[10px] text-faint">
+                        <span>active testing: {assessmentSummary.snapshot.configuration.active_testing ? 'on' : 'off'}</span>
+                        <span>engine: {assessmentSummary.snapshot.configuration.assessment_engine ? 'on' : 'off'}</span>
+                        <span>jwt: {assessmentSummary.snapshot.configuration.jwt_tokens_configured ? 'configured' : 'none'}</span>
+                        <span>ssrf: {assessmentSummary.snapshot.configuration.ssrf_validation_configured ? 'configured' : 'none'}</span>
+                        <span>config hash: {assessmentSummary.snapshot.config_fingerprint?.slice(0, 12)}</span>
+                      </div>
+                    )}
+
                     {selectedScan.assessment.tests?.length > 0 && (
                       <div className="space-y-1 max-h-52 overflow-y-auto">
                         {selectedScan.assessment.tests.map((t: any) => (
@@ -393,6 +545,28 @@ export const Scans: React.FC = () => {
                         ))}
                       </div>
                     )}
+
+                    <div className="mt-3 pt-3 border-t border-line">
+                      <button
+                        onClick={handleExportReport}
+                        disabled={reportLoading}
+                        className="inline-flex items-center gap-1.5 text-[11px] text-muted border border-line rounded px-2.5 py-1.5 hover:text-text hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        <FileDown className="w-3 h-3" aria-hidden="true" />
+                        {reportLoading ? 'Building export…' : reportExport ? 'Rebuild markdown export' : 'Export report (markdown)'}
+                      </button>
+                      {reportExport && (
+                        <div className="mt-3">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-[10px] text-faint">
+                            <span className="mono-cell">sha256: {reportExport.hash.slice(0, 16)}…</span>
+                            <span>{reportExport.generated_at}</span>
+                          </div>
+                          <pre className="bg-bg border border-line rounded p-3 font-mono text-[10px] text-accent/90 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-wrap">
+                            {reportExport.markdown}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -438,30 +612,68 @@ export const Scans: React.FC = () => {
                       <p className="text-[10.5px] text-faint mt-1">Findings are only ever created from real tool observations.</p>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {vulnerabilities.map((vuln) => {
-                        const isExpanded = expandedVuln === vuln.id;
-                        return (
-                          <div key={vuln.id} className="border border-line rounded overflow-hidden">
+                    <>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                        <button
+                          onClick={() => setFindingStatusFilter('all')}
+                          className={`mono-cell text-[10px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                            findingStatusFilter === 'all'
+                              ? 'border-accent/60 text-accent bg-accent/10'
+                              : 'border-line text-faint hover:text-muted'
+                          }`}
+                        >
+                          all
+                        </button>
+                        {LIFECYCLE_STATUSES.map((status) => {
+                          const count = vulnerabilities.filter(
+                            (v) => (v.status || 'confirmed').toLowerCase() === status
+                          ).length;
+                          if (count === 0) return null;
+                          const active = findingStatusFilter === status;
+                          return (
                             <button
-                              onClick={() => setExpandedVuln(isExpanded ? null : vuln.id)}
-                              className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-surface-2/60 transition-colors cursor-pointer"
-                              aria-expanded={isExpanded}
+                              key={status}
+                              onClick={() => setFindingStatusFilter(active ? 'all' : status)}
+                              className={`mono-cell text-[10px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                                active
+                                  ? 'border-accent/60 bg-accent/10 ' + (LIFECYCLE_TONES[status] || 'text-accent')
+                                  : 'border-line text-faint hover:text-muted'
+                              }`}
                             >
-                              <SeverityBadge severity={vuln.severity} />
-                              <span className="flex-1 min-w-0 text-[12px] font-medium text-text truncate">{vuln.title}</span>
-                              {vuln.cve && <span className="mono-cell text-[10px] text-faint shrink-0">{vuln.cve}</span>}
-                              <ChevronRight
-                                className={`w-3.5 h-3.5 text-faint shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                                aria-hidden="true"
-                              />
+                              {status}: {count}
                             </button>
+                          );
+                        })}
+                      </div>
 
-                            {isExpanded && <FindingDetail vuln={vuln} />}
-                          </div>
-                        );
-                      })}
-                    </div>
+                      <div className="space-y-2">
+                        {filteredVulnerabilities.map((vuln) => {
+                          const isExpanded = expandedVuln === vuln.id;
+                          return (
+                            <div key={vuln.id} className="border border-line rounded overflow-hidden">
+                              <button
+                                onClick={() => handleToggleVuln(vuln.id)}
+                                className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-surface-2/60 transition-colors cursor-pointer"
+                                aria-expanded={isExpanded}
+                              >
+                                <SeverityBadge severity={vuln.severity} />
+                                <span className="flex-1 min-w-0 text-[12px] font-medium text-text truncate">{vuln.title}</span>
+                                <span className={`mono-cell text-[10px] shrink-0 ${LIFECYCLE_TONES[vuln.status || 'confirmed'] || 'text-faint'}`}>
+                                  {(vuln.status || 'confirmed').toLowerCase()}
+                                </span>
+                                {vuln.cve && <span className="mono-cell text-[10px] text-faint shrink-0">{vuln.cve}</span>}
+                                <ChevronRight
+                                  className={`w-3.5 h-3.5 text-faint shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                  aria-hidden="true"
+                                />
+                              </button>
+
+                              {isExpanded && <FindingDetail vuln={vuln} detail={findingDetails[vuln.id]} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -497,102 +709,204 @@ export const Scans: React.FC = () => {
   );
 };
 
-const FindingDetail: React.FC<{ vuln: any }> = ({ vuln }) => (
-  <div className="border-t border-line bg-bg p-4 text-[11.5px] space-y-4">
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      <KV label="State" value={vuln.state || 'NEW'} mono />
-      <KV label="OWASP" value={vuln.owasp || '—'} />
-      <KV label="MITRE ATT&CK" value={vuln.mitre || '—'} />
-      <KV label="CVSS" value={vuln.cvss != null ? String(vuln.cvss) : '—'} />
-    </div>
+const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) => {
+  const d = detail || vuln;
+  const cvss = d.cvss || {};
+  const cvssConsistency = cvss.consistency || {};
+  const impactDetails = d.impact_details || {};
+  const remediationDetails = d.remediation_details || {};
 
-    <div>
-      <p className="eyebrow mb-1">Description</p>
-      <p className="text-muted leading-relaxed">{vuln.description}</p>
-    </div>
-
-    {vuln.remediation && (
-      <div>
-        <p className="eyebrow mb-1">Recommended mitigation</p>
-        <p className="text-accent leading-relaxed">{vuln.remediation}</p>
-      </div>
-    )}
-
-    {vuln.rule_id && (
-      <div className="flex items-center gap-2">
-        <p className="eyebrow">Rule</p>
-        <span className="mono-cell text-[10px] text-faint">{vuln.rule_id}</span>
-        {vuln.cwe && <span className="mono-cell text-[10px] text-faint">CWE-{vuln.cwe}</span>}
-      </div>
-    )}
-
-    {vuln.evidence_observation_ids?.length > 0 && (
-      <div>
-        <p className="eyebrow mb-1.5">Evidence provenance</p>
-        <div className="flex flex-wrap gap-1.5">
-          {vuln.evidence_observation_ids.map((oid: number) => (
-            <span key={oid} className="mono-cell text-[10px] text-accent border border-line rounded px-2 py-0.5">
-              observation #{oid}
-            </span>
-          ))}
-        </div>
-      </div>
-    )}
-
-    {(vuln.category || vuln.source_test) && (
+  return (
+    <div className="border-t border-line bg-bg p-4 text-[11.5px] space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <KV label="Category" value={vuln.category || '—'} mono />
-        <KV label="Source test" value={vuln.source_test || '—'} mono />
-        <KV label="Endpoint" value={vuln.endpoint ? `${vuln.http_method || ''} ${vuln.endpoint}` : '—'} />
-        <KV label="Security boundary" value={vuln.evidence_records?.[0]?.security_boundary || '—'} />
+        <KV label="State" value={d.state || 'NEW'} mono />
+        <KV
+          label="Lifecycle"
+          value={(d.status || 'confirmed').toLowerCase()}
+          mono
+        />
+        <KV label="Component" value={d.affected_component || '—'} mono />
+        <KV label="Parameter" value={d.parameter || '—'} mono />
       </div>
-    )}
 
-    {vuln.impact && (
-      <div>
-        <p className="eyebrow mb-1">Impact</p>
-        <p className="text-muted leading-relaxed">{vuln.impact}</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <KV label="OWASP" value={d.owasp || '—'} />
+        <KV label="MITRE ATT&CK" value={d.mitre || '—'} />
+        <KV label="CWE" value={d.cwe ? `CWE-${d.cwe}` : '—'} mono />
+        <KV label="Rule" value={d.rule_id || '—'} mono />
       </div>
-    )}
 
-    {vuln.validation_reason && (
-      <div>
-        <p className="eyebrow mb-1">Deterministic validation</p>
-        <p className="text-muted leading-relaxed">{vuln.validation_reason}</p>
-      </div>
-    )}
-
-    {vuln.evidence_records?.length > 0 && (
-      <div>
-        <p className="eyebrow mb-1.5">Structured evidence</p>
-        <div className="space-y-1.5">
-          {vuln.evidence_records.map((e: any) => (
-            <div key={e.id} className="border border-line rounded p-2.5 text-[10.5px]">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="mono-cell text-[10px] text-accent">{e.evidence_type}</span>
-                {e.observation_id != null && (
-                  <span className="mono-cell text-[10px] text-faint">observation #{e.observation_id}</span>
-                )}
-                <span className="mono-cell text-[10px] text-faint">{e.redaction_status}</span>
-              </div>
-              <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
-              <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
-            </div>
-          ))}
+      {(cvss.vector || cvss.score !== undefined || vuln.cvss != null) && (
+        <div>
+          <p className="eyebrow mb-1.5">CVSS</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <KV
+              label="Score / version"
+              value={cvss.score !== undefined ? `${cvss.score}${cvss.version ? ` (v${cvss.version})` : ''}` : vuln.cvss != null ? String(vuln.cvss) : '—'}
+              mono
+            />
+            <KV label="Vector" value={cvss.vector || '—'} mono />
+            <KV
+              label="Consistency"
+              value={cvssConsistency.status !== undefined ? cvssConsistency.status : '—'}
+              mono
+            />
+            <KV label="Note" value={cvssConsistency.note || '—'} />
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
-    {vuln.proof_of_concept && (
       <div>
-        <p className="eyebrow mb-1.5">Proof of concept</p>
-        <pre className="bg-surface-2 border border-line rounded p-3 font-mono text-[10px] text-muted overflow-x-auto whitespace-pre-wrap">
-          {vuln.proof_of_concept}
-        </pre>
+        <p className="eyebrow mb-1">Description</p>
+        <p className="text-muted leading-relaxed">{d.description}</p>
       </div>
-    )}
-  </div>
-);
+
+      {d.remediation && (
+        <div>
+          <p className="eyebrow mb-1">Recommended mitigation</p>
+          <p className="text-accent leading-relaxed">{d.remediation}</p>
+        </div>
+      )}
+
+      {remediationDetails?.summary && (
+        <div>
+          <p className="eyebrow mb-1">Remediation details</p>
+          <p className="text-muted leading-relaxed">{remediationDetails.summary}</p>
+          {remediationDetails.technical_fix && (
+            <p className="text-muted leading-relaxed mt-1">{remediationDetails.technical_fix}</p>
+          )}
+          {remediationDetails.validation_steps && (
+            <p className="text-faint leading-relaxed mt-1">{remediationDetails.validation_steps}</p>
+          )}
+        </div>
+      )}
+
+      {(impactDetails.technical || impactDetails.business || d.technical_impact || d.business_impact) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <p className="eyebrow mb-1">Impact (technical)</p>
+            <p className="text-muted leading-relaxed">{impactDetails.technical || d.technical_impact || '—'}</p>
+          </div>
+          <div>
+            <p className="eyebrow mb-1">Impact (business)</p>
+            <p className="text-muted leading-relaxed">{impactDetails.business || d.business_impact || '—'}</p>
+          </div>
+        </div>
+      )}
+
+      {d.rule_id && (
+        <div className="flex items-center gap-2">
+          <p className="eyebrow">Source test</p>
+          <span className="mono-cell text-[10px] text-faint">{d.source_test || '—'}</span>
+          {d.rule_id && <span className="mono-cell text-[10px] text-faint">{d.rule_id}</span>}
+        </div>
+      )}
+
+      {d.validation_reason && (
+        <div>
+          <p className="eyebrow mb-1">Deterministic validation</p>
+          <p className="text-muted leading-relaxed">{d.validation_reason}</p>
+        </div>
+      )}
+
+      {(d.first_seen || d.last_seen) && (
+        <div className="grid grid-cols-2 gap-3">
+          <KV label="First seen" value={d.first_seen ? formatDateTime(d.first_seen) : '—'} />
+          <KV label="Last seen" value={d.last_seen ? formatDateTime(d.last_seen) : '—'} />
+        </div>
+      )}
+
+      {d.proof_of_concept && d.proof_of_concept.request && (
+        <div>
+          <p className="eyebrow mb-1.5">Proof of concept</p>
+          <div className="border border-line rounded p-2.5 text-[10.5px] space-y-1 mb-2">
+            <p className="mono-cell text-faint">
+              {d.proof_of_concept.request.method} {d.proof_of_concept.request.endpoint || ''}
+              {d.proof_of_concept.request.parameter ? ` (param: ${d.proof_of_concept.request.parameter})` : ''}
+            </p>
+            <p className="text-muted"><span className="text-faint">expected:</span> {d.proof_of_concept.expected_behavior || '—'}</p>
+            <p className="text-muted"><span className="text-faint">observed:</span> {d.proof_of_concept.observed_behavior || '—'}</p>
+            <p className="text-muted"><span className="text-faint">validation:</span> {d.proof_of_concept.validation_logic || '—'}</p>
+          </div>
+          <pre className="bg-surface-2 border border-line rounded p-3 font-mono text-[10px] text-muted overflow-x-auto whitespace-pre-wrap">
+            {d.proof_of_concept.steps_to_reproduce}
+          </pre>
+        </div>
+      )}
+
+      {(d.evidence?.length > 0 || vuln.evidence_records?.length > 0) && (
+        <div>
+          <p className="eyebrow mb-1.5">Structured evidence</p>
+          <div className="space-y-1.5">
+            {(d.evidence?.length > 0 ? d.evidence : vuln.evidence_records).map((e: any) => {
+              const integrity = e.integrity || {};
+              const ok = integrity.request_ok !== false && integrity.response_ok !== false;
+              return (
+                <div key={e.evidence_id ?? e.id} className="border border-line rounded p-2.5 text-[10.5px]">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="mono-cell text-[10px] text-accent">{e.evidence_type}</span>
+                    {e.observation_id != null && (
+                      <span className="mono-cell text-[10px] text-faint">observation #{e.observation_id}</span>
+                    )}
+                    <span className="mono-cell text-[10px] text-faint">{e.redaction_status}</span>
+                    <span className="mono-cell text-[10px] text-faint">{e.security_boundary}</span>
+                    {integrity.status && (
+                      <span className={`mono-cell text-[10px] ${ok ? 'text-accent' : 'text-critical'}`}>
+                        integrity: {ok ? 'ok' : 'MISMATCH'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
+                  <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
+                  {(e.request_hash || e.response_hash) && (
+                    <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-[9.5px] text-faint">
+                      <span>req-hash: {e.request_hash ? e.request_hash.slice(0, 16) : '—'}</span>
+                      <span>resp-hash: {e.response_hash ? e.response_hash.slice(0, 16) : '—'}</span>
+                      {(e.original_size != null || e.captured_size != null) && (
+                        <span>
+                          captured {e.captured_size ?? '—'}/{e.original_size ?? '—'} bytes{e.truncated ? ' (truncated)' : ''}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {d.history?.length > 0 && (
+        <div>
+          <p className="eyebrow mb-1.5">Lifecycle history</p>
+          <div className="space-y-1">
+            {d.history.map((h: any, i: number) => (
+              <div key={i} className="flex items-start gap-2 text-[10.5px] font-mono">
+                <span className="text-faint shrink-0">{h.created_at || '—'}</span>
+                <span className={`shrink-0 ${LIFECYCLE_TONES[h.from_status] || 'text-faint'}`}>{h.from_status}</span>
+                <span className="text-faint shrink-0">→</span>
+                <span className={`shrink-0 ${LIFECYCLE_TONES[h.to_status] || 'text-faint'}`}>{h.to_status}</span>
+                <span className="text-faint shrink-0">by {h.actor || 'system'}</span>
+                <span className="text-muted truncate" title={h.reason || ''}>{h.reason || ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {d.proof_of_concept?.safety_constraints?.length > 0 && (
+        <div>
+          <p className="eyebrow mb-1">Safety constraints</p>
+          <ul className="list-disc pl-4 space-y-0.5 text-[10.5px] text-faint">
+            {d.proof_of_concept.safety_constraints.map((c: string, i: number) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const KV: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (
   <div>

@@ -99,11 +99,7 @@ def build(db, scan) -> AssessmentReport:
     rendered = [render_finding(db, f) for f in findings]
     confirmed_rendered = [r for r in rendered if r["status"] == lifecycle.STATUS_CONFIRMED]
     candidate_rendered = [r for r in rendered if r["status"] == lifecycle.STATUS_CANDIDATE]
-    evidence_rows = [
-        {"finding_id": e["id"], **e}
-        for f in findings
-        for e in render_evidence(db, f)
-    ]
+    evidence_rows = [e for f in findings for e in render_evidence(db, f)]
     observation_count = db.query(Observation).filter(Observation.scan_id == scan.id).count()
     tool_matrix = tool_availability(
         _TECH_TOOLS,
@@ -190,7 +186,13 @@ def build(db, scan) -> AssessmentReport:
         "limitations": limit_statement,
     }
 
-    markdown = "\n\n---\n\n".join(section.markdown for section in sections)
+    parts = []
+    for section in sections:
+        if section.id == "executive_summary":
+            parts.append(section.markdown.strip())
+        else:
+            parts.append(f"## {section.title}\n\n{section.markdown.strip()}")
+    markdown = "\n\n---\n\n".join(parts)
     markdown += (
         "\n\n---\n\n### Notice\n"
         "This report is valid only for the authorized target described in this document. "

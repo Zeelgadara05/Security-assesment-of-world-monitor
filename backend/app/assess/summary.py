@@ -92,13 +92,9 @@ def classify(*, coverage: dict | None, tests_failed: int = 0, tools_missing: lis
         status = STATUS_COMPLETED_WITH_GAPS
         completeness = UNKNOWN if coverage_percent is None else PARTIAL
     else:
+        # Applicable tests exist; either <100% coverage, all-skipped, or failed.
         status = STATUS_COMPLETED_WITH_GAPS
-        if coverage_percent >= 50.0:
-            completeness = PARTIAL
-        elif tests_executed > 0:
-            completeness = MINIMAL
-        else:
-            completeness = UNKNOWN
+        completeness = PARTIAL if coverage_percent >= 50.0 else MINIMAL
     return status, completeness
 
 
@@ -113,9 +109,12 @@ def headline(*, aggregate_counts: dict | None = None, coverage: dict | None = No
         return f"{confirmed} confirmed finding(s); assessment coverage unknown."
     percent = coverage.get("coverage_percent")
     status = status or STATUS_COMPLETED_WITH_GAPS
+    findings_phrase = (
+        "0 confirmed findings" if confirmed == 0 else f"{confirmed} confirmed finding(s)"
+    )
     if status in (STATUS_COMPLETED_WITH_GAPS, STATUS_FAILED):
-        return f"{confirmed} confirmed finding(s); assessment coverage {percent:.1f}%; assessment incomplete."
-    return f"{confirmed} confirmed finding(s); assessment coverage {percent:.1f}%."
+        return f"{findings_phrase}; assessment coverage {percent:.1f}%; assessment incomplete."
+    return f"{findings_phrase}; assessment coverage {percent:.1f}%."
 
 
 def config_fingerprint(config: dict | None) -> str:
