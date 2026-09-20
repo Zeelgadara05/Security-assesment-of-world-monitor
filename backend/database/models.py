@@ -96,6 +96,12 @@ class Scan(Base):
     assessment_tests = relationship("AssessmentTest", back_populates="scan", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="scan", cascade="all, delete-orphan")
     chats = relationship("ChatHistory", back_populates="scan", cascade="all, delete-orphan")
+    report_exports = relationship("ReportExport", back_populates="scan", cascade="all, delete-orphan")
+
+    # Phase 6 assessment completeness (never a security verdict).
+    assessment_status = Column(String(50), nullable=True)  # not_started|running|completed|completed_with_gaps|failed
+    assessment_completeness = Column(String(50), nullable=True)  # complete|partial|minimal|unknown
+    assessment_snapshot_json = Column(JSON, nullable=True)  # config snapshot + reproducibility metadata
 
 
 class ToolResult(Base):
