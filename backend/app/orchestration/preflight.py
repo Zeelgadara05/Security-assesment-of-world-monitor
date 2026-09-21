@@ -24,7 +24,7 @@ from app.tools.adapters.registry import get_adapter
 from app.tools.inventory import tool_inventory
 from app.tools.scanner_tools import sanitize_input
 
-_PROBE_TOOLS = ("real_dns", "real_tcp", "real_http")
+_PROBE_TOOLS = ("real_dns", "real_tcp", "real_http", "world_monitor_discovery")
 
 # Stage -> coarse category, kept in sync with app/orchestration/stages.
 _STAGE_CATEGORY = {
@@ -90,6 +90,11 @@ def build_preflight(db, scan, config: dict | None) -> dict:
             "no tools can be pointed at a safe subject")
 
     for tool in sorted(TOOL_TO_STAGE):
+        # Conditional tool: only relevant when the scan actually references a
+        # World Monitor deployment; otherwise it is not planned at all and must
+        # not appear as a (misleading) disabled/missing entry.
+        if tool == "world_monitor_discovery" and not config.get("world_monitor"):
+            continue
         entry = _tool_entry(tool, inv)
         adapter = get_adapter(tool)
         requested_on = stage_enabled(config, tool)

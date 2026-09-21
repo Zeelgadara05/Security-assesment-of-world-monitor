@@ -64,6 +64,8 @@ TOOL_TO_STAGE: dict[str, str] = {
     "real_dns": TARGET_NORMALIZATION,
     "real_tcp": TARGET_NORMALIZATION,
     "real_http": TARGET_NORMALIZATION,
+    # Phase 8: World Monitor deployment discovery (explicit config only)
+    "world_monitor_discovery": TARGET_NORMALIZATION,
     # recon
     "subfinder": PASSIVE_RECON,
     "assetfinder": PASSIVE_RECON,
@@ -89,6 +91,7 @@ DEFAULT_TOOLS: dict[str, bool] = {
     "real_dns": True,
     "real_tcp": True,
     "real_http": True,
+    "world_monitor_discovery": True,
     "subfinder": True,
     "assetfinder": True,
     "dnsx": True,
@@ -114,10 +117,20 @@ def is_extra(tool: str) -> bool:
 
 
 def enabled(config: dict, tool: str) -> bool:
-    """Operator intent: True unless explicitly disabled (extras: opt-in)."""
+    """Operator intent: True unless explicitly disabled (extras: opt-in).
+
+    ``world_monitor_discovery`` is conditional: it is only planned when the scan
+    explicitly carries a World Monitor deployment reference, so an ordinary scan
+    never records a meaningless World Monitor skip.
+    """
+    config = config or {}
+    if tool == "world_monitor_discovery":
+        if (config.get("tools") or {}).get(tool) is False:
+            return False
+        return bool(config.get("world_monitor"))
     if not is_extra(tool):
-        return bool((config or {}).get("tools", {}).get(tool, True))
-    return bool((config or {}).get("tools", {}).get(tool, False))
+        return bool((config.get("tools", {}) or {}).get(tool, True))
+    return bool((config.get("tools", {}) or {}).get(tool, False))
 
 
 def plan_tasks(config: dict | None = None) -> list[str]:

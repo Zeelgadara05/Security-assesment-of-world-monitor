@@ -6,6 +6,7 @@ import-time magic) so the executable catalogue is auditable in code review.
 from __future__ import annotations
 
 from app.assess.tests.auth import TEST as AUTHENTICATION
+from app.assess.tests.cookies import TEST as COOKIES
 from app.assess.tests.authorization import TEST as AUTHORIZATION
 from app.assess.tests.cors import TEST as CORS
 from app.assess.tests.disclosure import TEST as DISCLOSURE
@@ -26,6 +27,7 @@ ALL_TESTS = [
     HEADERS,
     DISCLOSURE,
     AUTHENTICATION,
+    COOKIES,
     METHODS,
     REDIRECTS,
     CORS,

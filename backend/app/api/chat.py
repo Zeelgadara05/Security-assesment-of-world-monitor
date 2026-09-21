@@ -81,7 +81,7 @@ def submit_chat_query(
     db: Session = Depends(get_db),
 ):
     """
-    Submits a user chat query to the AI Security Copilot.
+    Submits a user chat query to the assessment assistant.
 
     The referenced scan must belong to the authenticated user.  The assistant is
     a deterministic, keyword-assisted simulator (no LLM): replies are compiled

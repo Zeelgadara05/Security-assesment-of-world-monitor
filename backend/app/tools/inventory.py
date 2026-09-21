@@ -95,7 +95,8 @@ def tool_inventory() -> list[dict]:
         tools.append(entry)
     # Stdlib probes are always available (no external binary required).
     for probe, label in [("real_dns", "DNS resolution"), ("real_tcp", "TCP connect scan"),
-                         ("real_http", "HTTP fingerprinting")]:
+                         ("real_http", "HTTP fingerprinting"),
+                         ("world_monitor_discovery", "World Monitor deployment discovery")]:
         tools.append({
             "tool": probe,
             "binary": None,

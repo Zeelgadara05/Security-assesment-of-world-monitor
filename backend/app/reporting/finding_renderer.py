@@ -66,9 +66,15 @@ def history_entries(db, finding) -> list[dict]:
 
 
 def render_finding(db, finding) -> dict[str, Any]:
+    status = finding.status or lifecycle.STATUS_CONFIRMED
     out = {
         "id": finding.id,
-        "status": finding.status or lifecycle.STATUS_CONFIRMED,
+        "status": status,
+        # Epistemic provenance (Phase 8.5): a confirmed finding passed a
+        # deterministic validator (validated); a candidate is a real,
+        # evidence-backed observation that has not yet been validated.  Nothing
+        # from the ML advisory is ever represented as a finding.
+        "provenance": "validated" if status == lifecycle.STATUS_CONFIRMED else "observed",
         "severity": finding.severity,
         "title": safe_text(finding.title),
         "description": safe_text(finding.description),
@@ -109,6 +115,8 @@ def finding_to_markdown(db, finding) -> str:
     lines = [
         f"### F-{r['id']} ({r['status']}) — {r['title']}",
         "",
+        f"- **Provenance:** {r['provenance']}"
+        + (" (deterministic validator)" if r["provenance"] == "validated" else " (evidence-backed observation, awaiting validation)"),
         f"- **Severity:** {r['severity']}   **Component:** {r['affected_component']}",
         f"- **Endpoint:** `{r['endpoint'] or 'n/a'}` {r['http_method'] or ''}".rstrip(),
         f"- **CVSS:** version {cvss['version'] or 'n/a'} | score {score_line} | vector {vector_line}",

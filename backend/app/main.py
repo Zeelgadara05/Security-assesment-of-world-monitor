@@ -2,11 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database.connection import verify_schema, seed_defaults
 from app.config import settings
-from app.api import scans, chat, reports, auth, findings, tools, system
+from app.api import scans, chat, reports, auth, findings, tools, system, world_monitor
 
 app = FastAPI(
     title="CyberAgent API",
-    description="Autonomous AI Security Copilot Backend service orchestrating security scanning tools.",
+    description="Evidence-first security assessment platform. World Monitor and custom authorized targets run one engine; findings derive only from persisted observations.",
     version="1.0.0"
 )
 
@@ -37,6 +37,7 @@ app.include_router(reports.router)
 app.include_router(findings.router)
 app.include_router(tools.router)
 app.include_router(system.router)
+app.include_router(world_monitor.router)
 
 @app.get("/")
 def read_root():

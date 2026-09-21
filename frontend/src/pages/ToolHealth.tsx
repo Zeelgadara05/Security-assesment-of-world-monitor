@@ -39,6 +39,27 @@ export const ToolHealth: React.FC = () => {
     }
   }, []);
 
+  const reprobe = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      // Re-merge freshly installed PATH entries before re-probing so a tool
+      // installed after the backend started becomes visible without recovery.
+      await apiFetch('/tools/refresh', { method: 'POST' });
+      const res = await apiFetch('/tools/inventory');
+      if (res.ok) {
+        setData(await res.json());
+      } else {
+        const errData = await res.json().catch(() => null);
+        setError(errData?.detail || 'Failed to load tool inventory.');
+      }
+    } catch {
+      setError('Server connection failed.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchInventory();
   }, [fetchInventory]);
@@ -53,11 +74,11 @@ export const ToolHealth: React.FC = () => {
       <PageHeader
         eyebrow="Intelligence / Tool Health"
         title="Tool health"
-        description="Live scanner availability. Detection is honest — via real shutil.which probes on the host."
+        description="Live scanner availability. Detection is honest — via real shutil.which probes on the host. Re-probe re-reads your PATH (and TOOL_PATH) so binaries installed after launch appear without a restart."
         actions={
           <button
-            onClick={fetchInventory}
-            className="inline-flex items-center gap-1.5 text-[11px] border border-line rounded px-2.5 py-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors cursor-pointer"
+            onClick={reprobe}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text"
           >
             <RotateCw className="w-3 h-3" aria-hidden="true" />
             Re-probe
@@ -91,7 +112,7 @@ export const ToolHealth: React.FC = () => {
           </div>
 
           {data && (
-            <div className="panel rounded-md p-3 flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
+            <div className="panel flex flex-wrap items-center gap-2.5 p-4 text-[11.5px] text-muted">
               <Activity className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
               <span>
                 Execution mode: <StatusBadge status={data.simulation_mode ? 'Running' : 'Completed'} label={data.simulation_mode ? 'Simulation' : 'Live'} />
@@ -104,10 +125,22 @@ export const ToolHealth: React.FC = () => {
             </div>
           )}
 
+          {!loading && data && tools.length > 0 && installed === 0 && (
+            <div className="panel border-warn/30 bg-warn/[0.05] p-4 text-[11.5px] leading-relaxed text-muted">
+              <p className="font-medium text-text">No scanner binaries found on PATH</p>
+              <p className="mt-1">
+                Install the scanners you want (a package manager or <code className="font-mono">go install</code>), then
+                click <span className="text-text">Re-probe</span>. If a binary lives outside PATH, add its folder to the{' '}
+                <code className="font-mono">TOOL_PATH</code> variable in{' '}
+                <code className="font-mono">backend/.env</code> and restart the backend.
+              </p>
+            </div>
+          )}
+
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-20 w-full rounded" />
+                <Skeleton key={i} className="h-20 w-full rounded-2xl" />
               ))}
             </div>
           ) : tools.length === 0 ? (
@@ -116,14 +149,14 @@ export const ToolHealth: React.FC = () => {
             <div className="space-y-5">
               {categories.map((cat) => (
                 <div key={cat}>
-                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">
+                  <h2 className="mb-2.5 text-[12.5px] font-semibold text-text">
                     {CATEGORY_LABELS[cat] || cat}
                   </h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {tools
                       .filter((t) => t.category === cat)
                       .map((tool) => (
-                        <div key={tool.tool} className="panel rounded-md p-3 flex items-start justify-between gap-3">
+                        <div key={tool.tool} className="panel flex items-start justify-between gap-3 p-4">
                           <div className="min-w-0 space-y-1">
                             <div className="flex items-center gap-2">
                               <StatusBadge status={tool.installed ? 'Completed' : 'Failed'} label="" />
@@ -165,16 +198,16 @@ export const ToolHealth: React.FC = () => {
 };
 
 const Tile: React.FC<{ label: string; icon: React.ReactNode; value: number; loading?: boolean }> = ({ label, icon, value, loading }) => (
-  <div className="panel rounded-md p-4 flex items-center gap-3">
-    <span className="w-9 h-9 rounded-md border border-line bg-surface-2 flex items-center justify-center text-accent">
+  <div className="panel flex items-center gap-3.5 p-5">
+    <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface-2 text-accent">
       {icon}
     </span>
     <div>
-      <p className="eyebrow mb-0.5">{label}</p>
+      <p className="eyebrow mb-1.5">{label}</p>
       {loading ? (
         <Skeleton className="h-6 w-10" />
       ) : (
-        <span className="text-xl font-semibold text-text leading-none">{value}</span>
+        <span className="tnum text-[26px] font-semibold leading-none tracking-tight text-text">{value}</span>
       )}
     </div>
   </div>

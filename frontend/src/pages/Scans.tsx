@@ -53,6 +53,16 @@ const LIFECYCLE_TONES: Record<string, string> = {
   reopened: 'text-medium',
 };
 
+const dedupeTools = (rows: any[]): any[] => {
+  const order: string[] = [];
+  const byName = new Map<string, any>();
+  rows.forEach((row) => {
+    if (!byName.has(row.name)) order.push(row.name);
+    byName.set(row.name, row);
+  });
+  return order.map((name) => byName.get(name));
+};
+
 export const Scans: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [selectedScan, setSelectedScan] = useState<any | null>(null);
@@ -107,7 +117,7 @@ export const Scans: React.FC = () => {
         const data = await res.json();
         setSelectedScan(data);
         setVulnerabilities(data.vulnerabilities || []);
-        setTools(data.tools || []);
+        setTools(dedupeTools(data.tools || []));
         setLogs(data.logs || '');
         startSSEStream(id);
       } else {
@@ -187,7 +197,13 @@ export const Scans: React.FC = () => {
         if (data.type === 'tool') {
           const line = `[Tool] ${data.tool} -> ${data.status}`;
           setLiveEvents((prev) => [...prev, line]);
-          setTools((prev) => [...prev, { name: data.tool, status: data.status }]);
+          setTools((prev) => {
+            const idx = prev.findIndex((t) => t.name === data.tool);
+            if (idx === -1) return [...prev, { name: data.tool, status: data.status }];
+            const next = prev.slice();
+            next[idx] = { ...next[idx], status: data.status };
+            return next;
+          });
         }
         if (data.type === 'finding') {
           setLiveEvents((prev) => [...prev, `[Finding] ${data.severity}: ${data.title}`]);
@@ -273,19 +289,27 @@ export const Scans: React.FC = () => {
     selectedScan &&
     (selectedScan.status === 'Running' || selectedScan.status === 'Pending' || selectedScan.status === 'Cancelling…') &&
     !['completed', 'partial', 'failed', 'cancelled'].includes((selectedScan.stage || '').toLowerCase());
+  const sih = selectedScan?.assessment?.sih as
+    | { areas: any[]; unmapped_categories?: Record<string, number> }
+    | undefined;
+  const SIH_TONES: Record<string, string> = {
+    covered: 'text-accent border-accent/40 bg-accent/5',
+    partial: 'text-medium border-warn/40 bg-warn/5',
+    not_assessed: 'text-faint border-line',
+  };
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Operations / Assessments"
-        title="Scan history"
-        description="Stage-packed lifetime of each scanning job, its evidence, and outcomes."
+        title="Assessments"
+        description="Stage-driven lifetime of each assessment, its evidence, and outcomes."
         actions={
           selectedScan && currentStageIdx >= 0 && !terminalStage ? (
             <button
               onClick={handleCancel}
               disabled={cancelling}
-              className="inline-flex items-center gap-1.5 text-[11px] text-critical border border-critical/40 rounded px-2.5 py-1.5 hover:bg-critical/10 transition-colors disabled:opacity-50 cursor-pointer"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-critical/35 px-3 py-1.5 text-[11.5px] text-critical transition-colors duration-500 ease-spring hover:bg-critical/[0.08] disabled:opacity-50"
             >
               <Scale className="w-3 h-3" aria-hidden="true" />
               {cancelling ? 'Requesting…' : 'Request cancellation'}
@@ -293,7 +317,7 @@ export const Scans: React.FC = () => {
           ) : (
             <button
               onClick={fetchScans}
-              className="inline-flex items-center gap-1.5 text-[11px] border border-line rounded px-2.5 py-1.5 text-muted hover:text-text hover:bg-surface-2 transition-colors cursor-pointer"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text"
             >
               <RotateCw className="w-3 h-3" aria-hidden="true" />
               Refresh
@@ -305,21 +329,21 @@ export const Scans: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Scan list */}
         <div className="lg:col-span-1">
-          <div className="panel rounded-md overflow-hidden">
+          <div className="panel overflow-hidden">
             <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Triggered scans</h2>
+              <h2 className="text-[12.5px] font-semibold text-text">Assessment runs</h2>
               <span className="mono-cell text-[10px] text-faint">{scans.length}</span>
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-2">
               {loading ? (
                 <div className="px-2 space-y-2">
                   {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="skeleton h-14 rounded" />
+                    <div key={i} className="skeleton h-14 rounded-xl" />
                   ))}
                 </div>
               ) : scans.length === 0 ? (
                 <EmptyState
-                  title="No scan logs"
+                  title="No assessments"
                   description="Queue an assessment from the New Assessment page."
                 />
               ) : (
@@ -330,7 +354,7 @@ export const Scans: React.FC = () => {
                       <li key={scan.id}>
                         <button
                           onClick={() => handleSelectScan(scan.id)}
-                          className={`w-full text-left rounded px-3 py-2.5 border-l-2 transition-colors cursor-pointer ${
+                          className={`w-full cursor-pointer rounded-xl border-l-2 px-3 py-2.5 text-left transition-colors duration-500 ease-spring ${
                             selected
                               ? 'bg-surface-2 border-accent'
                               : 'border-transparent hover:bg-surface-2/60'
@@ -368,12 +392,12 @@ export const Scans: React.FC = () => {
               <EmptyState
                 icon={<FileSearch className="w-4 h-4" aria-hidden="true" />}
                 title="No assessment selected"
-                description="Select a scan from the list to inspect its pipeline, evidence, and findings."
+                description="Select an assessment from the list to inspect its pipeline, evidence, and findings."
               />
             ) : (
               <>
                 {/* Header summary */}
-                <div className="panel rounded-md p-4">
+                <div className="panel p-4">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                     <div className="min-w-0">
                       <h2 className="text-base font-semibold text-text truncate">{selectedScan.target}</h2>
@@ -391,11 +415,19 @@ export const Scans: React.FC = () => {
                     <div className="shrink-0 flex items-center gap-6">
                       <div className="text-right">
                         <p className="eyebrow">Coverage</p>
-                        <p className="text-lg font-semibold text-text">{selectedScan.coverage ?? '—'}%</p>
+                        <p className="text-lg font-semibold text-text">
+                          {selectedScan.coverage !== null && selectedScan.coverage !== undefined
+                            ? `${selectedScan.coverage}%`
+                            : '—'}
+                        </p>
                       </div>
                       <div className="text-right">
                         <p className="eyebrow">Security score</p>
-                        <p className="text-lg font-semibold text-text">{selectedScan.security_score ?? '—'}/100</p>
+                        <p className="text-lg font-semibold text-text">
+                          {selectedScan.security_score !== null && selectedScan.security_score !== undefined
+                            ? `${selectedScan.security_score}/100`
+                            : '—'}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -406,13 +438,13 @@ export const Scans: React.FC = () => {
                       <div className="flex items-center justify-between gap-2 mb-2.5">
                         <div className="flex items-center gap-1.5">
                           <Layers className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pipeline lifecycle</span>
+                          <span className="text-[12.5px] font-semibold text-text">Pipeline lifecycle</span>
                         </div>
                         <div className="flex items-center gap-1">
                           <span className="eyebrow mr-1">Console</span>
                           <button
                             onClick={() => setConsoleMode('classic')}
-                            className={`mono-cell text-[9.5px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                            className={`mono-cell cursor-pointer rounded-full border px-2.5 py-0.5 text-[9.5px] transition-colors duration-500 ease-spring ${
                               consoleMode === 'classic'
                                 ? 'border-accent/60 text-accent bg-accent/10'
                                 : 'border-line text-faint hover:text-muted'
@@ -422,7 +454,7 @@ export const Scans: React.FC = () => {
                           </button>
                           <button
                             onClick={() => setConsoleMode('phase7')}
-                            className={`mono-cell text-[9.5px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                            className={`mono-cell cursor-pointer rounded-full border px-2.5 py-0.5 text-[9.5px] transition-colors duration-500 ease-spring ${
                               consoleMode === 'phase7'
                                 ? 'border-accent/60 text-accent bg-accent/10'
                                 : 'border-line text-faint hover:text-muted'
@@ -439,7 +471,7 @@ export const Scans: React.FC = () => {
                           return (
                             <div key={st.id} className="flex items-center gap-1.5 shrink-0">
                               <span
-                                className={`px-2 py-1 rounded border mono-cell text-[9px] uppercase tracking-wide ${
+                                className={`mono-cell rounded-full border px-2.5 py-1 text-[9px] uppercase tracking-wide ${
                                   active
                                     ? 'border-accent/60 text-accent bg-accent/10'
                                     : done
@@ -460,13 +492,58 @@ export const Scans: React.FC = () => {
                   )}
                 </div>
 
+                {/* SIH26163 security-area coverage */}
+                {sih?.areas?.length ? (
+                  <div className="panel p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[12.5px] font-semibold text-text">SIH26163 security-area coverage</h3>
+                      <span className="eyebrow">{sih.areas.filter((a) => a.executed > 0).length}/7 areas exercised</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {sih.areas.map((a) => (
+                        <div key={a.key} className="rounded-xl border border-line px-3 py-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="text-[11.5px] font-medium text-text">{a.title}</span>
+                            <span
+                              className={`mono-cell shrink-0 rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
+                                SIH_TONES[a.status] || 'text-faint border-line'
+                              }`}
+                            >
+                              {a.status.replace('_', ' ')}
+                            </span>
+                          </div>
+                          <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                            {a.coverage_percent !== null ? (
+                              <div
+                                className={`h-full rounded-full ${a.status === 'covered' ? 'bg-accent' : 'bg-warn'}`}
+                                style={{ width: `${Math.min(100, a.coverage_percent)}%` }}
+                              />
+                            ) : null}
+                          </div>
+                          <div className="mt-1.5 flex items-center justify-between mono-cell text-[9.5px] text-faint">
+                            <span>
+                              {a.executed}/{a.applicable} applicable tests executed
+                            </span>
+                            <span>{a.coverage_percent !== null ? `${a.coverage_percent}%` : 'not assessed'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {sih.unmapped_categories && Object.keys(sih.unmapped_categories).length > 0 && (
+                      <p className="mt-3 text-[10px] text-faint">
+                        Categories outside the SIH framework: {Object.keys(sih.unmapped_categories).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
                 {/* Phase 6 assessment + completeness */}
                 {consoleMode === 'classic' && (
                 <>
                 {selectedScan.assessment?.coverage && (
-                  <div className="panel rounded-md p-4">
+                  <div className="panel p-4">
                     <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Assessment coverage</h3>
+                      <h3 className="text-[12.5px] font-semibold text-text">Assessment coverage</h3>
                       <span className="eyebrow">
                         {selectedScan.assessment.coverage.findings_confirmed ?? 0} confirmed finding(s)
                       </span>
@@ -474,7 +551,7 @@ export const Scans: React.FC = () => {
 
                     {assessmentSummary?.headline && (
                       <div
-                        className={`mb-3 border rounded px-3 py-2 text-[11px] ${
+                        className={`mb-3 rounded-xl border px-3.5 py-2.5 text-[11.5px] leading-relaxed ${
                           assessmentSummary.assessment_status === 'completed'
                             ? 'border-accent/30 bg-accent/5 text-accent'
                             : 'border-warn/30 bg-warn/5 text-medium'
@@ -515,7 +592,7 @@ export const Scans: React.FC = () => {
                             (count as number) > 0 && (
                               <span
                                 key={status}
-                                className={`mono-cell text-[10px] border border-line rounded px-2 py-0.5 ${
+                                className={`mono-cell text-[10px] border border-line rounded-md px-2 py-0.5 ${
                                   LIFECYCLE_TONES[status] || 'text-faint'
                                 }`}
                               >
@@ -533,7 +610,7 @@ export const Scans: React.FC = () => {
                     )}
 
                     {(assessmentSummary?.snapshot?.configuration?.tools_missing?.length ?? 0) > 0 && (
-                      <div className="mb-3 border border-warn/30 bg-warn/5 rounded px-3 py-2">
+                      <div className="mb-3 rounded-xl border border-warn/30 bg-warn/[0.06] px-3 py-2.5">
                         <p className="eyebrow mb-1">Assessment gaps — tools not installed</p>
                         <div className="flex flex-wrap gap-1.5">
                           {(assessmentSummary.snapshot.configuration.tools_missing as string[]).map((t) => (
@@ -558,7 +635,7 @@ export const Scans: React.FC = () => {
                     {selectedScan.assessment.tests?.length > 0 && (
                       <div className="space-y-1 max-h-52 overflow-y-auto">
                         {selectedScan.assessment.tests.map((t: any) => (
-                          <div key={t.test_id} className="flex items-center gap-2 border border-line rounded px-2.5 py-1.5">
+                          <div key={t.test_id} className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5">
                             <span className="mono-cell text-[10px] text-muted w-44 truncate">{t.test_id}</span>
                             <span
                               className={`mono-cell text-[9.5px] uppercase shrink-0 ${
@@ -579,7 +656,7 @@ export const Scans: React.FC = () => {
                       <button
                         onClick={handleExportReport}
                         disabled={reportLoading}
-                        className="inline-flex items-center gap-1.5 text-[11px] text-muted border border-line rounded px-2.5 py-1.5 hover:text-text hover:bg-surface-2 transition-colors disabled:opacity-50 cursor-pointer"
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text disabled:opacity-50"
                       >
                         <FileDown className="w-3 h-3" aria-hidden="true" />
                         {reportLoading ? 'Building export…' : reportExport ? 'Rebuild markdown export' : 'Export report (markdown)'}
@@ -590,7 +667,7 @@ export const Scans: React.FC = () => {
                             <span className="mono-cell">sha256: {reportExport.hash.slice(0, 16)}…</span>
                             <span>{reportExport.generated_at}</span>
                           </div>
-                          <pre className="bg-bg border border-line rounded p-3 font-mono text-[10px] text-accent/90 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-wrap">
+                          <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10px] leading-relaxed text-accent/90">
                             {reportExport.markdown}
                           </pre>
                         </div>
@@ -600,9 +677,9 @@ export const Scans: React.FC = () => {
                 )}
 
                 {/* Tool pipeline */}
-                <div className="panel rounded-md p-4">
+                <div className="panel p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Tool pipeline ({tools.length})</h3>
+                    <h3 className="text-[12.5px] font-semibold text-text">Tool pipeline ({tools.length})</h3>
                     {notInstalledTools > 0 && (
                       <span className="mono-cell text-[10px] text-medium">{notInstalledTools} not installed</span>
                     )}
@@ -614,7 +691,7 @@ export const Scans: React.FC = () => {
                       {tools.map((tr, i) => (
                         <div
                           key={`${tr.name}-${i}`}
-                          className="flex items-center justify-between gap-2 border border-line rounded px-2.5 py-2"
+                          className="flex items-center justify-between gap-2 rounded-xl border border-line px-2.5 py-2"
                           title={tr.raw_output ? 'raw output available in observations' : undefined}
                         >
                           <span className="mono-cell text-[11px] text-text truncate">{tr.name}</span>
@@ -626,9 +703,9 @@ export const Scans: React.FC = () => {
                 </div>
 
                 {/* Findings */}
-                <div className="panel rounded-md p-4">
+                <div className="panel p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                    <h3 className="text-[12.5px] font-semibold text-text">
                       Findings ({vulnerabilities.length})
                     </h3>
                     <span className="eyebrow">evidence-backed</span>
@@ -637,7 +714,7 @@ export const Scans: React.FC = () => {
                   {vulnerabilities.length === 0 ? (
                     <div className="flex flex-col items-center text-center py-6">
                       <ShieldCheck className="w-8 h-8 text-faint" strokeWidth={1.5} aria-hidden="true" />
-                      <p className="text-[12px] text-muted mt-2">No evidence-backed findings persisted for this scan.</p>
+                      <p className="text-[12px] text-muted mt-2">No evidence-backed findings persisted for this assessment.</p>
                       <p className="text-[10.5px] text-faint mt-1">Findings are only ever created from real tool observations.</p>
                     </div>
                   ) : (
@@ -645,7 +722,7 @@ export const Scans: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-1.5 mb-3">
                         <button
                           onClick={() => setFindingStatusFilter('all')}
-                          className={`mono-cell text-[10px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                              className={`mono-cell cursor-pointer rounded-full border px-2.5 py-0.5 text-[10px] transition-colors duration-500 ease-spring ${
                             findingStatusFilter === 'all'
                               ? 'border-accent/60 text-accent bg-accent/10'
                               : 'border-line text-faint hover:text-muted'
@@ -663,7 +740,7 @@ export const Scans: React.FC = () => {
                             <button
                               key={status}
                               onClick={() => setFindingStatusFilter(active ? 'all' : status)}
-                              className={`mono-cell text-[10px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                          className={`mono-cell cursor-pointer rounded-full border px-2.5 py-0.5 text-[10px] transition-colors duration-500 ease-spring ${
                                 active
                                   ? 'border-accent/60 bg-accent/10 ' + (LIFECYCLE_TONES[status] || 'text-accent')
                                   : 'border-line text-faint hover:text-muted'
@@ -679,7 +756,7 @@ export const Scans: React.FC = () => {
                         {filteredVulnerabilities.map((vuln) => {
                           const isExpanded = expandedVuln === vuln.id;
                           return (
-                            <div key={vuln.id} className="border border-line rounded overflow-hidden">
+                            <div key={vuln.id} className="overflow-hidden rounded-2xl border border-line">
                               <button
                                 onClick={() => handleToggleVuln(vuln.id)}
                                 className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-surface-2/60 transition-colors cursor-pointer"
@@ -709,21 +786,21 @@ export const Scans: React.FC = () => {
                 {/* Live events + logs */}
                 {(liveEvents.length > 0 || logs) && (
                   <>
-                    <div className="panel rounded-md p-4">
+                    <div className="panel p-4">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Live events</span>
+                        <span className="text-[12.5px] font-semibold text-text">Live events</span>
                       </div>
-                      <pre className="bg-bg border border-line rounded p-3 font-mono text-[10.5px] text-accent/90 leading-relaxed max-h-28 overflow-y-auto whitespace-pre-wrap">
+                      <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-accent/90">
                         {liveEvents.length === 0 ? '// waiting…' : liveEvents.join('\n')}
                       </pre>
                     </div>
-                    <div className="panel rounded-md p-4">
+                    <div className="panel p-4">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Scan logs</span>
+                        <span className="text-[12.5px] font-semibold text-text">Execution logs</span>
                       </div>
-                      <pre className="bg-bg border border-line rounded p-3 font-mono text-[10.5px] text-muted leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">
+                      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-muted">
                         {logs || '// No logs yet.'}
                       </pre>
                     </div>
@@ -850,7 +927,7 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
       {d.proof_of_concept && d.proof_of_concept.request && (
         <div>
           <p className="eyebrow mb-1.5">Proof of concept</p>
-          <div className="border border-line rounded p-2.5 text-[10.5px] space-y-1 mb-2">
+          <div className="rounded-xl border border-line p-3 space-y-1 mb-2 text-[10.5px]">
             <p className="mono-cell text-faint">
               {d.proof_of_concept.request.method} {d.proof_of_concept.request.endpoint || ''}
               {d.proof_of_concept.request.parameter ? ` (param: ${d.proof_of_concept.request.parameter})` : ''}
@@ -859,7 +936,7 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
             <p className="text-muted"><span className="text-faint">observed:</span> {d.proof_of_concept.observed_behavior || '—'}</p>
             <p className="text-muted"><span className="text-faint">validation:</span> {d.proof_of_concept.validation_logic || '—'}</p>
           </div>
-          <pre className="bg-surface-2 border border-line rounded p-3 font-mono text-[10px] text-muted overflow-x-auto whitespace-pre-wrap">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-line bg-surface-2 p-3 font-mono text-[10px] text-muted">
             {d.proof_of_concept.steps_to_reproduce}
           </pre>
         </div>
@@ -873,7 +950,7 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
               const integrity = e.integrity || {};
               const ok = integrity.request_ok !== false && integrity.response_ok !== false;
               return (
-                <div key={e.evidence_id ?? e.id} className="border border-line rounded p-2.5 text-[10.5px]">
+                <div key={e.evidence_id ?? e.id} className="rounded-xl border border-line p-3 text-[10.5px]">
                   <div className="flex flex-wrap items-center gap-2 mb-1">
                     <span className="mono-cell text-[10px] text-accent">{e.evidence_type}</span>
                     {e.observation_id != null && (

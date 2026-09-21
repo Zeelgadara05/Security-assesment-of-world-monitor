@@ -63,7 +63,8 @@ def _merge_config(requested: dict | None, stored: dict | None) -> dict:
     if "assessment_engine" in req:
         base["assessment_engine"] = bool(req.get("assessment_engine"))
     for key in ("auth_identities", "ssrf_validation_url", "ssrf_token", "jwt_tokens",
-                "jwt_alg_none_accepted", "installed_tools", "tools_missing"):
+                "jwt_alg_none_accepted", "installed_tools", "tools_missing",
+                "world_monitor"):
         if key in req:
             base[key] = req[key]
     return base

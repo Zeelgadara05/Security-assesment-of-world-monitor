@@ -4,28 +4,28 @@ import { ShieldAlert, ShieldX, AlertTriangle, Info } from 'lucide-react';
 const severityStyles: Record<string, { text: string; chip: string; icon: React.ReactNode }> = {
   Critical: {
     text: 'text-critical',
-    chip: 'border-critical/40 text-critical bg-critical/10',
-    icon: <ShieldX className="w-3 h-3" aria-hidden="true" />,
+    chip: 'border-critical/35 text-critical bg-critical/[0.09]',
+    icon: <ShieldX className="w-3 h-3" strokeWidth={1.5} aria-hidden="true" />,
   },
   High: {
     text: 'text-high',
-    chip: 'border-high/40 text-high bg-high/10',
-    icon: <ShieldAlert className="w-3 h-3" aria-hidden="true" />,
+    chip: 'border-high/35 text-high bg-high/[0.09]',
+    icon: <ShieldAlert className="w-3 h-3" strokeWidth={1.5} aria-hidden="true" />,
   },
   Medium: {
     text: 'text-medium',
-    chip: 'border-medium/40 text-medium bg-medium/10',
-    icon: <AlertTriangle className="w-3 h-3" aria-hidden="true" />,
+    chip: 'border-medium/35 text-medium bg-medium/[0.09]',
+    icon: <AlertTriangle className="w-3 h-3" strokeWidth={1.5} aria-hidden="true" />,
   },
   Low: {
     text: 'text-low',
-    chip: 'border-low/40 text-low bg-low/10',
-    icon: <Info className="w-3 h-3" aria-hidden="true" />,
+    chip: 'border-low/35 text-low bg-low/[0.09]',
+    icon: <Info className="w-3 h-3" strokeWidth={1.5} aria-hidden="true" />,
   },
   Info: {
     text: 'text-neutral',
-    chip: 'border-line-strong text-neutral bg-surface-2',
-    icon: <Info className="w-3 h-3" aria-hidden="true" />,
+    chip: 'border-line-strong text-neutral bg-white/[0.03]',
+    icon: <Info className="w-3 h-3" strokeWidth={1.5} aria-hidden="true" />,
   },
 };
 
@@ -35,7 +35,9 @@ export const SeverityBadge: React.FC<{ severity: string; withIcon?: boolean }> =
 }) => {
   const style = severityStyles[severity] ?? severityStyles.Info;
   return (
-    <span className={`inline-flex items-center gap-1 border justify-center px-2 py-0.5 rounded-full text-[10.5px] font-semibold ${style.chip}`}>
+    <span
+      className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-1 text-[10.5px] font-semibold tracking-wide ${style.chip}`}
+    >
       {withIcon && style.icon}
       {severity}
     </span>

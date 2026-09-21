@@ -1,94 +1,239 @@
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-
 @import "tailwindcss";
 
+/* ============================================================================
+   CyberAgent — Vanguard UI design system
+   Vibe: Ethereal Glass  ·  OLED-tinted near-black, emerald mesh, hairline glass
+   ========================================================================= */
+
 @theme {
-  --color-bg: #0a0b0d;
-  --color-surface: #101214;
-  --color-surface-2: #15171b;
-  --color-line: #26282d;
-  --color-line-strong: #36393f;
-  --color-text: #e7e7ea;
-  --color-muted: #a1a6ae;
-  --color-faint: #71767d;
+  /* Surfaces — one cool-gray family, tinted toward a single hue */
+  --color-bg: #06070a;
+  --color-bg-2: #090a0f;
+  --color-surface: #0c0e13;
+  --color-surface-2: #12151c;
+  --color-surface-3: #181c24;
+  --color-line: #23262e;
+  --color-line-strong: #343943;
 
-  --color-accent: #10b981;
-  --color-accent-strong: #059669;
-  --color-accent-soft: rgba(16, 185, 129, 0.12);
+  --color-text: #eceef2;
+  --color-muted: #a2a8b3;
+  --color-faint: #6b717c;
 
-  --color-critical: #ef4444;
-  --color-high: #f97316;
-  --color-medium: #eab308;
-  --color-low: #3b82f6;
-  --color-neutral: #8b929a;
+  /* Single considered accent (emerald, held under 80% saturation) */
+  --color-accent: #18b98a;
+  --color-accent-strong: #0d9e73;
+  --color-accent-bright: #37d9a6;
+  --color-accent-soft: rgba(24, 185, 138, 0.12);
 
-  --font-sans: 'Fira Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Fira Code', ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
+  /* Semantic severities — desaturated so they sit with the neutrals */
+  --color-critical: #ef5b61;
+  --color-high: #ee8b45;
+  --color-medium: #d9ae3f;
+  --color-low: #5c93cf;
+  --color-neutral: #8b929c;
+
+  /* Type — Geist / Geist Mono */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
+
+  /* Motion — spring-like, never linear */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Elevation — tinted, diffused, single light source from above */
+  --shadow-lift: 0 1px 0 rgba(255, 255, 255, 0.03), 0 24px 48px -36px rgba(0, 0, 0, 0.9);
+  --shadow-float: 0 40px 80px -48px rgba(0, 0, 0, 0.95);
+  --shadow-glow: 0 0 0 1px rgba(24, 185, 138, 0.25), 0 18px 50px -24px rgba(24, 185, 138, 0.45);
+}
+
+/* Light, refined iconography by default (Vanguard spec: no thick Lucide) */
+.lucide {
+  stroke-width: 1.5;
 }
 
 html {
   color-scheme: dark;
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  @apply bg-bg text-text font-sans antialiased;
   margin: 0;
+  min-height: 100dvh;
+  background-color: var(--color-bg);
+  background-image:
+    radial-gradient(60% 52% at 8% -12%, rgba(24, 185, 138, 0.11), transparent 62%),
+    radial-gradient(48% 48% at 100% -4%, rgba(92, 147, 207, 0.07), transparent 58%),
+    radial-gradient(70% 60% at 50% 118%, rgba(24, 185, 138, 0.06), transparent 64%);
+  background-attachment: fixed;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv01' 1, 'ss01' 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Fixed film-grain — pointer-events-none, never on scrolling content */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: rgba(16, 185, 129, 0.25);
-  color: #f4f4f5;
+  background: rgba(24, 185, 138, 0.26);
+  color: #f4f7f6;
 }
 
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: 6px;
 }
 
-/* ---- Panel surface: border-divided, no floating glow ---- */
+/* ---- Skip link (a11y) ---- */
+.skip-link {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -140%);
+  z-index: 80;
+  padding: 10px 18px;
+  border-radius: 0 0 12px 12px;
+  background: var(--color-accent);
+  color: #04140e;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: transform 0.3s var(--ease-spring);
+}
+.skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
+/* ---- Surfaces: double-bezel (shell + inner highlight) ---- */
 .panel {
-  @apply bg-surface border border-line;
+  position: relative;
+  border-radius: 1.125rem;
+  border: 1px solid var(--color-line);
+  background-color: var(--color-surface);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 42%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    var(--shadow-lift);
 }
 
 .panel-2 {
-  @apply bg-surface-2 border border-line;
+  position: relative;
+  border-radius: 1.125rem;
+  border: 1px solid var(--color-line);
+  background-color: var(--color-surface-2);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 46%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-/* ---- Section eyebrow (mono uppercase) ---- */
+/* True glass — reserved for fixed / floating chrome only */
+.glass {
+  background: rgba(10, 12, 17, 0.72);
+  border: 1px solid var(--color-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    var(--shadow-float);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+}
+
+/* ---- Typography helpers ---- */
 .eyebrow {
-  @apply font-mono text-[10px] uppercase tracking-[0.14em] text-faint;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-faint);
 }
 
-/* ---- Numeric/label cell in mono ---- */
 .mono-cell {
-  @apply font-mono text-[11px];
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ---- Table primitives ---- */
+.display {
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Chips / pills ---- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---- Tables ---- */
 .tbl th {
-  @apply font-mono text-[10px] uppercase tracking-[0.12em] text-faint font-medium text-left py-2 px-3 whitespace-nowrap border-b border-line;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-faint);
+  font-weight: 500;
+  text-align: left;
+  padding: 12px 16px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-line);
+  background: rgba(255, 255, 255, 0.015);
 }
 .tbl td {
-  @apply px-3 py-2.5 text-[12.5px] align-middle;
+  padding: 13px 16px;
+  font-size: 12.5px;
+  vertical-align: middle;
 }
 .tbl tbody tr {
-  @apply border-b border-line/70 hover:bg-surface-2 transition-colors;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-line) 70%, transparent);
+  transition: background-color 0.4s var(--ease-spring);
+}
+.tbl tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.025);
 }
 .tbl tbody tr:last-child {
   border-bottom: none;
 }
 
-/* ---- Status dot ---- */
+/* ---- Status dots ---- */
 .dot {
-  @apply inline-block w-1.5 h-1.5 rounded-full align-middle;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  vertical-align: middle;
 }
 .dot-active {
   background: var(--color-accent);
-  animation: ca-pulse 1.8s ease-in-out infinite;
+  animation: ca-pulse 2s var(--ease-spring) infinite;
 }
 .dot-ok {
   background: var(--color-accent);
+  box-shadow: 0 0 8px rgba(24, 185, 138, 0.6);
 }
 .dot-warn {
   background: var(--color-medium);
@@ -101,21 +246,36 @@ body {
 }
 
 @keyframes ca-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.35); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(16, 185, 129, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(24, 185, 138, 0.4); }
+  50% { opacity: 0.5; box-shadow: 0 0 0 5px rgba(24, 185, 138, 0); }
 }
 
 /* ---- Skeleton shimmer ---- */
 .skeleton {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(90deg, #17191d 25%, #1d2025 37%, #17191d 63%);
+  border-radius: 6px;
+  background: linear-gradient(90deg, #14171d 25%, #1c2028 37%, #14171d 63%);
   background-size: 400% 100%;
-  animation: ca-shimmer 1.4s ease infinite;
+  animation: ca-shimmer 1.6s var(--ease-spring) infinite;
 }
 @keyframes ca-shimmer {
   0% { background-position: 100% 50%; }
   100% { background-position: 0 50%; }
+}
+
+/* ---- Scroll-reveal (IntersectionObserver driven) ---- */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.8s var(--ease-out-quint),
+    transform 0.8s var(--ease-out-quint);
+  will-change: transform, opacity;
+}
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
 }
 
 /* ---- Custom scrollbar ---- */
@@ -127,12 +287,14 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c2f35;
-  border-radius: 5px;
-  border: 2px solid var(--color-bg);
+  background: #262a32;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3d4148;
+  background: #39404b;
+  background-clip: content-box;
 }
 
 /* ---- Reduced motion ---- */
@@ -141,8 +303,10 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-  .dot-active {
-    animation: none;
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
   }
 }

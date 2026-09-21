@@ -2,7 +2,7 @@ import React from 'react';
 
 export type StatusTone = 'active' | 'ok' | 'warn' | 'danger' | 'neutral';
 
-const toneClasses: Record<StatusTone, string> = {
+const dotClasses: Record<StatusTone, string> = {
   active: 'dot dot-active',
   ok: 'dot dot-ok',
   warn: 'dot dot-warn',
@@ -10,12 +10,12 @@ const toneClasses: Record<StatusTone, string> = {
   neutral: 'dot dot-neutral',
 };
 
-const textClasses: Record<StatusTone, string> = {
-  active: 'text-accent',
-  ok: 'text-accent',
-  warn: 'text-medium',
-  danger: 'text-critical',
-  neutral: 'text-faint',
+const chipClasses: Record<StatusTone, string> = {
+  active: 'border-accent/30 text-accent bg-accent/[0.07]',
+  ok: 'border-accent/30 text-accent bg-accent/[0.07]',
+  warn: 'border-medium/30 text-medium bg-medium/[0.07]',
+  danger: 'border-critical/30 text-critical bg-critical/[0.07]',
+  neutral: 'border-line text-faint bg-white/[0.02]',
 };
 
 export function statusTone(status: string): StatusTone {
@@ -46,8 +46,10 @@ interface StatusBadgeProps {
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, label }) => {
   const tone = statusTone(status);
   return (
-    <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] ${textClasses[tone]} min-w-fit`}>
-      <span className={toneClasses[tone]} aria-hidden="true" />
+    <span
+      className={`inline-flex min-w-fit items-center gap-2 rounded-full border px-2.5 py-1 font-mono text-[10.5px] tracking-wide ${chipClasses[tone]}`}
+    >
+      <span className={dotClasses[tone]} aria-hidden="true" />
       {label ?? statusLabel(status)}
     </span>
   );

@@ -33,7 +33,7 @@ export const DataTable = <T,>({
 }: DataTableProps<T>): React.ReactElement => {
   if (error) {
     return (
-      <div className="text-[12px] text-critical py-8 text-center border border-critical/30 bg-critical/5 rounded-md">
+      <div className="rounded-2xl border border-critical/25 bg-critical/[0.05] py-8 text-center text-[12px] text-critical">
         {error}
       </div>
     );
@@ -45,20 +45,16 @@ export const DataTable = <T,>({
 
   if (rows.length === 0) {
     return empty ? (
-      <EmptyState
-        title={empty.title}
-        description={empty.description}
-        action={empty.action}
-      />
+      <EmptyState title={empty.title} description={empty.description} action={empty.action} />
     ) : (
-      <div className="text-center text-muted text-[12.5px] py-10">No records.</div>
+      <div className="py-10 text-center text-[12.5px] text-muted">No records.</div>
     );
   }
 
   return (
-    <div className="border border-line rounded-md overflow-hidden">
+    <div className="overflow-hidden rounded-2xl border border-line">
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse tbl">
+        <table className="tbl w-full border-collapse">
           <thead>
             <tr>
               {columns.map((c) => (

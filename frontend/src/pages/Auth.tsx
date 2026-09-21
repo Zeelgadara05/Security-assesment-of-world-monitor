@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Lock, ArrowRight, ShieldCheck, ScanSearch, AlertCircle } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { ArrowRight, ShieldCheck, ScanSearch, AlertCircle, Fingerprint, Activity } from 'lucide-react';
 import { apiFetch, setToken } from '../api';
 import { Input } from '../components/Field';
 import { Button } from '../components/Button';
@@ -8,12 +9,19 @@ interface AuthProps {
   onLoginSuccess: () => void;
 }
 
+const PILLARS = [
+  { icon: ScanSearch, title: 'Stage-driven pipeline', copy: 'Asynchronous scanning from recon to reporting, every stage recorded.' },
+  { icon: ShieldCheck, title: 'Authorized scope only', copy: 'Every trigger is scope-gated and rejected with 403 when out of bounds.' },
+  { icon: Activity, title: 'Evidence-backed findings', copy: 'Findings are derived from real observations — never invented.' },
+];
+
 export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,16 +38,27 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
         body: JSON.stringify({ email: email.trim(), password }),
       });
 
-      if (res.status === 401 || res.status === 403 || res.status === 409) {
-        const errData = await res.json().catch(() => null);
-        setError(errData?.detail || 'Authentication failed. Check your credentials.');
-        setLoading(false);
-        return;
-      }
-
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
-        setError(errData?.detail || 'Request failed. Ensure the backend server is running.');
+        const rawDetail = errData?.detail;
+        const detail =
+          typeof rawDetail === 'string'
+            ? rawDetail
+            : Array.isArray(rawDetail) && typeof rawDetail[0]?.msg === 'string'
+              ? rawDetail[0].msg.replace(/^Value error,\s*/, '')
+              : null;
+        if (res.status === 409 && isSignUp) {
+          setError(detail || 'An account with this email already exists. Please sign in instead.');
+          setIsSignUp(false);
+        } else if (res.status === 401) {
+          setError(detail || 'Invalid email or password.');
+        } else if (res.status === 403) {
+          setError(detail || 'You do not have permission to do that.');
+        } else if (res.status === 422) {
+          setError(detail || 'Please check the email and password you entered.');
+        } else {
+          setError(detail || 'Request failed. Ensure the backend server is running.');
+        }
         setLoading(false);
         return;
       }
@@ -60,107 +79,134 @@ export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-bg px-4 py-10 font-sans text-text">
-      <div className="grid w-full max-w-[880px] grid-cols-1 md:grid-cols-2 border border-line rounded-lg overflow-hidden bg-surface">
-        {/* Intro / brand side */}
-        <div className="hidden md:flex flex-col justify-between p-8 bg-surface-2 border-r border-line">
+    <div className="relative flex min-h-[100dvh] items-center justify-center px-4 py-12 sm:px-6">
+      <motion.div
+        className="grid w-full max-w-[1000px] grid-cols-1 gap-4 lg:grid-cols-[1.05fr_0.95fr]"
+        initial={reduceMotion ? false : { opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+      >
+        {/* Brand / narrative */}
+        <div className="panel hidden flex-col justify-between p-9 lg:flex">
           <div>
-            <div className="flex items-center gap-2.5 mb-8">
-              <span className="w-8 h-8 rounded overflow-hidden border border-line flex items-center justify-center">
-                <img src="/logo.png" alt="" className="w-full h-full object-cover" />
+            <div className="mb-10 flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-line bg-surface-2">
+                <img src="/logo.png" alt="" className="h-full w-full object-cover" />
               </span>
-              <div className="leading-none">
-                <span className="text-sm font-semibold tracking-tight">CyberAgent</span>
-                <span className="block text-[9px] text-faint font-mono uppercase tracking-[0.18em] mt-1">
-                  Scan Platform
-                </span>
-              </div>
+              <span className="flex flex-col leading-none">
+                <span className="text-[16px] font-semibold tracking-tight">CyberAgent</span>
+                <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.22em] text-faint">Assessment Platform</span>
+              </span>
             </div>
 
-            <span className="eyebrow mb-3 block">Scope-gated Assessment</span>
-            <h2 className="text-xl font-semibold leading-snug text-text">
-              Automated security assessments, backed by evidence.
+            <span className="chip mb-5">Scope-gated assessment</span>
+            <h2 className="display max-w-[14ch] text-[34px] font-semibold text-text">
+              Security assessments, backed by evidence.
             </h2>
-            <p className="text-[12.5px] text-muted leading-relaxed mt-3">
+            <p className="mt-4 max-w-[48ch] text-[13px] leading-relaxed text-muted">
               Orchestrate your declared scanning tooling against authorized targets only. Every finding is created from
               real tool observations — never invented.
             </p>
           </div>
 
-          <ul className="space-y-2.5">
-            <li className="flex items-center gap-2.5 text-[12px] text-muted">
-              <ScanSearch className="w-4 h-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
-              Stage-driven asynchronous scan pipeline
-            </li>
-            <li className="flex items-center gap-2.5 text-[12px] text-muted">
-              <ShieldCheck className="w-4 h-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
-              Authorized-scope enforcement on every trigger
-            </li>
+          <ul className="mt-10 space-y-3.5">
+            {PILLARS.map((p) => {
+              const Icon = p.icon;
+              return (
+                <li key={p.title} className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-line bg-surface-2 text-accent">
+                    <Icon className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+                  </span>
+                  <span>
+                    <span className="block text-[12.5px] font-medium text-text">{p.title}</span>
+                    <span className="mt-0.5 block text-[11.5px] leading-relaxed text-faint">{p.copy}</span>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
 
-        {/* Form side */}
-        <div className="p-8 sm:p-10">
-          <span className="eyebrow mb-2 block">{isSignUp ? 'Registration' : 'Gate Access'}</span>
-          <h1 className="text-lg font-semibold text-text">
-            {isSignUp ? 'Create corporate account' : 'Sign in to your workspace'}
-          </h1>
-          <p className="text-[12px] text-muted mt-1 mb-6">
-            {isSignUp ? 'Register with your work email to operate the scan platform.' : 'Authenticate to access assessment operations.'}
-          </p>
+        {/* Form — double-bezel */}
+        <div className="rounded-[2rem] border border-line bg-white/[0.02] p-1.5 shadow-[0_40px_80px_-48px_rgba(0,0,0,0.95)]">
+          <div className="panel h-full rounded-[calc(2rem-0.375rem)] p-8 sm:p-10">
+            <div className="mb-8 flex items-center gap-2.5 lg:hidden">
+              <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl border border-line bg-surface-2">
+                <img src="/logo.png" alt="" className="h-full w-full object-cover" />
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight">CyberAgent</span>
+            </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <Input
-              label="Work email"
-              type="email"
-              required
-              autoComplete="email"
-              placeholder="you@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <Input
-              label="Password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete={isSignUp ? 'new-password' : 'current-password'}
-              placeholder={isSignUp ? 'At least 8 characters' : '••••••••••••'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <span className="eyebrow mb-3 block">{isSignUp ? 'Registration' : 'Gate access'}</span>
+            <h1 className="display text-[24px] font-semibold text-text">
+              {isSignUp ? 'Create your account' : 'Sign in to your workspace'}
+            </h1>
+            <p className="mt-2 mb-8 text-[12.5px] leading-relaxed text-muted">
+              {isSignUp
+                ? 'Register with your work email to operate the scan platform.'
+                : 'Authenticate to access assessment operations.'}
+            </p>
 
-            {error && (
-              <div className="flex gap-2 border border-critical/40 bg-critical/10 rounded px-3 py-2.5 text-[11px] text-critical">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
-                <span>{error}</span>
-              </div>
-            )}
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <Input
+                label="Work email"
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={loading}
+              />
+              <Input
+                label="Password"
+                type="password"
+                required
+                minLength={8}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                placeholder={isSignUp ? 'At least 8 characters' : '••••••••••••'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={loading}
+              />
 
-            <Button type="submit" variant="primary" disabled={loading} className="w-full">
-              {loading ? 'Authenticating…' : isSignUp ? 'Create account' : 'Sign in'}
-              {!loading && <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />}
-            </Button>
-          </form>
+              {error && (
+                <div className="flex gap-2.5 rounded-xl border border-critical/35 bg-critical/[0.07] px-3.5 py-3 text-[11.5px] leading-relaxed text-critical">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} aria-hidden="true" />
+                  <span>{error}</span>
+                </div>
+              )}
 
-          <div className="mt-5 pt-4 border-t border-line flex items-center gap-1.5 text-[11px] text-faint">
-            <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span>
-              {isSignUp ? 'Already registered? ' : 'Need access? '}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSignUp((v) => !v);
-                  setError('');
-                }}
-                className="text-muted hover:text-text underline underline-offset-2 cursor-pointer transition-colors"
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={loading}
+                className="w-full"
+                trailing={!loading ? <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} /> : undefined}
               >
-                {isSignUp ? 'Sign in here' : 'Sign up here'}
-              </button>
-            </span>
+                {loading ? 'Authenticating…' : isSignUp ? 'Create account' : 'Sign in'}
+              </Button>
+            </form>
+
+            <div className="mt-7 flex items-center gap-2 border-t border-line pt-5 text-[11.5px] text-faint">
+              <Fingerprint className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} aria-hidden="true" />
+              <span>
+                {isSignUp ? 'Already registered? ' : 'Need access? '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSignUp((v) => !v);
+                    setError('');
+                  }}
+                  className="text-muted underline underline-offset-4 transition-colors duration-500 ease-spring hover:text-text"
+                >
+                  {isSignUp ? 'Sign in here' : 'Sign up here'}
+                </button>
+              </span>
+            </div>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
