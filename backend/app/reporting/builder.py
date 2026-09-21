@@ -220,7 +220,10 @@ def build(db, scan) -> AssessmentReport:
         assessment_completeness=completeness,
         headline=headline,
         sections=sections,
-    ), markdown, json_payload, rendered
+        markdown=markdown,
+        json_content=json_payload,
+        rendered_findings=rendered,
+    )
 
 
 # --------------------------------------------------------------------------- helpers
@@ -437,7 +440,7 @@ def _phase7_trail_md(trail: dict) -> dict:
     val_stats = " • ".join(f"{k}:{v}" for k, v in sorted(ledger["validation_status_bucket"].items()))
     ledger_lines += [
         "",
-        f"- **Validator verdicts:** {val_stats or 'none'}",
+        f"- Validator verdicts: {val_stats or 'none'}",
     ]
     confirmed_rows = [v for v in ledger["validations"] if v["status"] == "confirmed"]
     if confirmed_rows:

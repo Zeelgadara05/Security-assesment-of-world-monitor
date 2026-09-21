@@ -18,6 +18,13 @@ export const Reports: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [contentLoading, setContentLoading] = useState(false);
+  const [execMeta, setExecMeta] = useState<{
+    version: string;
+    stages: number;
+    tools: number;
+    findings: number;
+    advisory_only: boolean;
+  } | null>(null);
 
   const fetchReports = useCallback(async () => {
     setLoading(true);
@@ -53,7 +60,15 @@ export const Reports: React.FC = () => {
         if (reqFormat === 'json') {
           const jsonVal = await res.json();
           setContent(JSON.stringify(jsonVal, null, 2));
+          setExecMeta({
+            version: jsonVal.execution_platform_version || null,
+            stages: Array.isArray(jsonVal.stages) ? jsonVal.stages.length : 0,
+            tools: Array.isArray(jsonVal.execution_trail?.tools) ? jsonVal.execution_trail.tools.length : 0,
+            findings: Array.isArray(jsonVal.findings) ? jsonVal.findings.length : 0,
+            advisory_only: jsonVal.ml_advisory != null,
+          });
         } else {
+          setExecMeta(null);
           setContent(await res.text());
         }
       }
@@ -135,6 +150,12 @@ export const Reports: React.FC = () => {
               </div>
               {selected && (
                 <div className="flex items-center gap-2">
+                  {execMeta?.version && (
+                    <span className="mono-cell text-[9.5px] text-faint border border-line rounded px-2 py-0.5">
+                      exec: {execMeta.version} · {execMeta.stages} stages · {execMeta.tools} tools · {execMeta.findings}{' '}
+                      findings{execMeta.advisory_only ? ' · advisory only (no model)' : ''}
+                    </span>
+                  )}
                   <Select value={format} onChange={(e) => selectedScanId && loadContent(selectedScanId, e.target.value as Format)} className="!py-1.5 !text-[11px]">
                     <option value="markdown">Markdown</option>
                     <option value="json">JSON</option>

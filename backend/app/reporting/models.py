@@ -31,6 +31,13 @@ class AssessmentReport:
     assessment_completeness: str
     headline: str
     sections: list[ReportSection] = field(default_factory=list)
+    # Canonical serialized forms materialized by the builder on construction.
+    # ``markdown`` is the full rendered Markdown document and ``json_content``
+    # is the deterministic JSON payload; both are derived from the same section
+    # model so the two exports always agree.
+    markdown: str = ""
+    json_content: dict = field(default_factory=dict)
+    rendered_findings: list = field(default_factory=list)
 
     def section(self, section_id: str) -> ReportSection | None:
         for section in self.sections:

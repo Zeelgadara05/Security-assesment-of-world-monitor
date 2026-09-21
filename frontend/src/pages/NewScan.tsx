@@ -6,6 +6,7 @@ import {
   BriefcaseBusiness,
   AlertCircle,
   CheckCircle2,
+  Ban,
   Circle,
   ChevronRight,
 } from 'lucide-react';
@@ -62,6 +63,13 @@ export const NewScan: React.FC = () => {
   const [scopeTarget, setScopeTarget] = useState('');
   const [scopeError, setScopeError] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [toolStatus, setToolStatus] = useState<{
+    installed: any[];
+    missing: any[];
+    installed_count: number;
+    missing_count: number;
+  } | null>(null);
+  const [toolStatusLoading, setToolStatusLoading] = useState(true);
 
   const logTerminalRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -100,8 +108,29 @@ export const NewScan: React.FC = () => {
     }
   };
 
+  const fetchToolStatus = async () => {
+    setToolStatusLoading(true);
+    try {
+      const res = await apiFetch('/tools/status');
+      if (res.ok) {
+        const data = await res.json();
+        setToolStatus({
+          installed: data.installed || [],
+          missing: data.missing || [],
+          installed_count: data.installed_count || 0,
+          missing_count: data.missing_count || 0,
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching tool status:', err);
+    } finally {
+      setToolStatusLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchScope();
+    fetchToolStatus();
   }, []);
 
   const toggleTool = (id: string) => {
@@ -394,9 +423,62 @@ export const NewScan: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
 
-        {/* Live events */}
+          {/* Scanner readiness / preflight preview */}
+          <div className="panel rounded-md p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
+                <Crosshair className="w-3.5 h-3.5" aria-hidden="true" />
+                Scanner readiness
+              </h2>
+              <button
+                onClick={fetchToolStatus}
+                className="mono-cell text-[10px] border border-line rounded px-2 py-0.5 text-faint hover:text-muted hover:bg-surface-2 transition-colors cursor-pointer"
+              >
+                {toolStatusLoading ? 'probing…' : 're-probe'}
+              </button>
+            </div>
+            <p className="text-[10.5px] text-faint leading-relaxed">
+              Preflight preview from real <code className="font-mono">shutil.which</code> probes. Selected tools that are
+              missing here are recorded as <span className="text-medium">gaps</span> — never simulated.
+            </p>
+
+            {!toolStatusLoading && toolStatus && (
+              <div className="flex items-center gap-4">
+                <span className="mono-cell text-[10px] text-accent">
+                  <CheckCircle2 className="w-3 h-3 inline mr-1" aria-hidden="true" />
+                  {toolStatus.installed_count} installed
+                </span>
+                <span className="mono-cell text-[10px] text-medium">
+                  <Ban className="w-3 h-3 inline mr-1" aria-hidden="true" />
+                  {toolStatus.missing_count} missing
+                </span>
+              </div>
+            )}
+
+            {!toolStatusLoading && toolStatus && (
+              (() => {
+                const installedSet = new Set(toolStatus.installed.map((t) => t.tool));
+                const selectedMissing = TOOLS.filter((t) => selectedTools[t.id] && !installedSet.has(t.id));
+                return selectedMissing.length > 0 ? (
+                  <div className="border border-warn/30 bg-warn/5 rounded px-3 py-2">
+                    <p className="eyebrow mb-1">Selected but not installed — will record gaps</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedMissing.map((t) => (
+                        <span key={t.id} className="mono-cell text-[10px] text-medium">{t.id}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="flex items-center gap-1.5 text-[11px] text-accent">
+                    <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    All selected scanners are callable on this host.
+                  </p>
+                );
+              })()
+            )}
+          </div>
+        </div>
         <div className="xl:col-span-8 panel rounded-md p-4 flex flex-col min-h-0" style={{ maxHeight: 720 }}>
           <div className="flex items-center justify-between pb-3 border-b border-line mb-3">
             <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">

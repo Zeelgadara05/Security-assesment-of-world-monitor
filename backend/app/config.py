@@ -45,7 +45,14 @@ class Settings:
 
         # Preserve only origins actually required by the current frontend.
         # CORS_ORIGINS overrides the development defaults when provided.
-        raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+        # Vite picks the first free port starting at 5173, so local dev allows
+        # the common fallback ports (5174, 5175) as well as the primary one.
+        raw_origins = os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:5174,http://127.0.0.1:5174,"
+            "http://localhost:5175,http://127.0.0.1:5175",
+        )
         self.cors_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
 
         # Session lifetime in hours (fixed expiry; no sliding renewal).
