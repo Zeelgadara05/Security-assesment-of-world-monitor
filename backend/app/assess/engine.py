@@ -292,7 +292,10 @@ def _persist_findings(db, scan, candidates, observation_rows, target) -> tuple[l
             first_seen=now,
             last_seen=now,
             evidence=evidence_summary(candidate),
-            evidence_observation_ids=[o["id"] for o in _matching_observations(index, candidate)],
+            evidence_observation_ids=sorted(
+                set(candidate.observation_ids or [])
+                | {o["id"] for o in _matching_observations(index, candidate)}
+            ),
             created_at=now,
         )
         db.add(row)

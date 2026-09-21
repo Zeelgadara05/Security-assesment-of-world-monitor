@@ -656,7 +656,9 @@ def get_scan_report(
     from app.reporting import builder as report_builder
     from app.reporting import export as report_export
 
-    report, markdown, json_payload, _rendered = report_builder.build(db, scan)
+    report = report_builder.build(db, scan)
+    markdown = report.markdown
+    json_payload = report.json_content
 
     if fmt == "json":
         payload = report_export.render_json(json_payload)

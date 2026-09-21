@@ -72,7 +72,18 @@ def compare(db, scan_a_id: int, scan_b_id: int) -> dict:
     ``added`` keys exist only in scan B; ``removed`` only in scan A;
     ``retained`` in both; ``reintroduced`` were seen before A, then absent in A,
     and are present again in B.
+
+    Reintroduction history is scoped to the target being compared: fingerprints
+    from unrelated targets are never treated as historical evidence for this
+    target, so a fingerprint that only ever appeared on another host is
+    ``added`` here, not ``reintroduced``.  Comparing scans of different targets
+    returns raw added/removed/retained with empty reintroduction (the semantics
+    are undefined across targets); the API layer flags that with a note.
     """
+    from sqlalchemy import and_
+
+    from database.models import Scan
+
     if scan_a_id == scan_b_id:
         keys = _scan_key_ids(db, scan_a_id)
         return {
@@ -81,24 +92,41 @@ def compare(db, scan_a_id: int, scan_b_id: int) -> dict:
             "reintroduced": [], "same_target": True,
         }
 
+    scan_a = db.query(Scan).filter(Scan.id == scan_a_id).first()
+    scan_b = db.query(Scan).filter(Scan.id == scan_b_id).first()
+    same_target = bool(
+        scan_a is not None and scan_b is not None
+        and (scan_a.target or "").strip() == (scan_b.target or "").strip()
+    )
+
     a_keys = _scan_key_ids(db, scan_a_id)
     b_keys = _scan_key_ids(db, scan_b_id)
 
-    older = (
-        db.query(Vulnerability.scan_id)
-        .filter(Vulnerability.scan_id != scan_a_id, Vulnerability.scan_id != scan_b_id)
-        .all()
-    )
-    older_scans = sorted({sid for (sid,) in older})
-    historically_present: set[str] = set()
-    for sid in older_scans:
-        historically_present |= _scan_key_ids(db, sid)
+    reintroduced: set[str] = set()
+    if same_target:
+        older = (
+            db.query(Vulnerability.scan_id)
+            .join(Scan, Scan.id == Vulnerability.scan_id)
+            .filter(
+                Vulnerability.scan_id != scan_a_id,
+                Vulnerability.scan_id != scan_b_id,
+                and_(
+                    Scan.target.is_not(None),
+                    Scan.target == (scan_a.target or "").strip(),
+                ),
+            )
+            .all()
+        )
+        older_scans = sorted({sid for (sid,) in older})
+        historically_present: set[str] = set()
+        for sid in older_scans:
+            historically_present |= _scan_key_ids(db, sid)
+        reintroduced = {
+            k for k in b_keys
+            if k in historically_present and k not in a_keys
+        }
 
-    reintroduced = sorted(
-        k for k in b_keys
-        if k in historically_present and k not in a_keys
-    )
-    added = sorted(b_keys - a_keys - set(reintroduced))
+    added = sorted(k for k in b_keys if k not in a_keys and k not in reintroduced)
     removed = sorted(a_keys - b_keys)
     retained = sorted(a_keys & b_keys)
     return {
@@ -107,8 +135,8 @@ def compare(db, scan_a_id: int, scan_b_id: int) -> dict:
         "added": added,
         "removed": removed,
         "retained": retained,
-        "reintroduced": reintroduced,
-        "same_target": True,
+        "reintroduced": sorted(reintroduced),
+        "same_target": same_target,
     }
 
 

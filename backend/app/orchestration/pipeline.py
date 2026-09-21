@@ -53,8 +53,13 @@ from app.tools import scanner_tools
 
 logger = logging.getLogger("cyberagent.pipeline")
 
+# A gap is anything that kept a planned tool from actually contributing:
+# a missing binary is recorded as not_installed and counts as a gap (the scan
+# may never claim full completion when a tool could not run).  Skips caused by
+# operator configuration remain deliberate decisions, not gaps.
 _FAILED_STATES = {scanner_tools.STATE_EXECUTION_FAILED,
-                  scanner_tools.STATE_TIMEOUT, scanner_tools.STATE_PARSE_FAILED}
+                  scanner_tools.STATE_TIMEOUT, scanner_tools.STATE_PARSE_FAILED,
+                  scanner_tools.STATE_NOT_INSTALLED}
 
 
 def orchestrate_scan_phase7(scan_id: int, simulation: bool = True,

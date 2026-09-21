@@ -22,7 +22,6 @@ from database.models import (
 )
 from app.core.auth import get_or_create_user_project
 from app.orchestration import state as phase7_state
-from tests.conftest import other_auth_headers  # noqa: F401  (fixture registration)
 
 
 def _owner_user(db):

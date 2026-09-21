@@ -17,6 +17,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { SkeletonPanel } from '../components/Skeleton';
 import { formatDate, formatDateTime } from '../components/format';
+import { Phase7Console } from '../components/Phase7Console';
 
 const STAGES = [
   { id: 'queued', label: 'Queued' },
@@ -69,6 +70,7 @@ export const Scans: React.FC = () => {
   const [findingDetails, setFindingDetails] = useState<Record<number, any>>({});
   const [reportExport, setReportExport] = useState<{ markdown: string; hash: string; generated_at: string } | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+  const [consoleMode, setConsoleMode] = useState<'classic' | 'phase7'>('classic');
   const eventSourceRef = useRef<EventSource | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
 
@@ -401,9 +403,34 @@ export const Scans: React.FC = () => {
                   {/* Lifecycle */}
                   {selectedScan.stage && (
                     <div className="mt-4 pt-4 border-t border-line">
-                      <div className="flex items-center gap-1.5 mb-2.5">
-                        <Layers className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pipeline lifecycle</span>
+                      <div className="flex items-center justify-between gap-2 mb-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pipeline lifecycle</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="eyebrow mr-1">Console</span>
+                          <button
+                            onClick={() => setConsoleMode('classic')}
+                            className={`mono-cell text-[9.5px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                              consoleMode === 'classic'
+                                ? 'border-accent/60 text-accent bg-accent/10'
+                                : 'border-line text-faint hover:text-muted'
+                            }`}
+                          >
+                            Classic
+                          </button>
+                          <button
+                            onClick={() => setConsoleMode('phase7')}
+                            className={`mono-cell text-[9.5px] border rounded px-2 py-0.5 transition-colors cursor-pointer ${
+                              consoleMode === 'phase7'
+                                ? 'border-accent/60 text-accent bg-accent/10'
+                                : 'border-line text-faint hover:text-muted'
+                            }`}
+                          >
+                            Phase 7
+                          </button>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                         {STAGES.map((st, idx) => {
@@ -434,6 +461,8 @@ export const Scans: React.FC = () => {
                 </div>
 
                 {/* Phase 6 assessment + completeness */}
+                {consoleMode === 'classic' && (
+                <>
                 {selectedScan.assessment?.coverage && (
                   <div className="panel rounded-md p-4">
                     <div className="flex items-center justify-between mb-3">
@@ -700,6 +729,8 @@ export const Scans: React.FC = () => {
                     </div>
                   </>
                 )}
+                </>)}
+                {consoleMode === 'phase7' && <Phase7Console scanId={selectedScan.id} />}
               </>
             )}
           </div>
