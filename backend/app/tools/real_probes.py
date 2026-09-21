@@ -146,12 +146,15 @@ def tcp_probe(host: str, ports=None, timeout: int = _TCP_CONNECT_TIMEOUT_SECONDS
 
 
 def _http_observations(url: str, status: int, headers: dict, body: str, error: str | None) -> list[dict]:
+    from app.http.cookies import extract_cookie_attributes
+
     host = url.split("://", 1)[-1].split("/", 1)[0]
     data = {
         "url": url,
         "scheme": url.split("://", 1)[0].lower(),
         "status_code": status,
     }
+    cookies = extract_cookie_attributes(headers.get("Set-Cookie") or headers.get("set-cookie"))
     if error is None:
         server = headers.get("Server") or headers.get("server") or ""
         title_match = _TITLE_RE.search(body or "")
@@ -176,6 +179,7 @@ def _http_observations(url: str, status: int, headers: dict, body: str, error: s
             "has_xcto": bool(headers.get("X-Content-Type-Options") or headers.get("x-content-type-options")),
             "has_xframe": bool(headers.get("X-Frame-Options") or headers.get("x-frame-options")),
             "headers": header_subset,
+            "cookies": cookies,
         })
         raw = (f"GET {url} -> {status} [{server}]"
                + (f" title={title!r}" if title else "")

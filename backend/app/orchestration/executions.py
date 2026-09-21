@@ -91,6 +91,8 @@ def _begin_execution(db, scan, tool: str, attempt: int) -> object:
 def _adapter_kind(tool: str) -> str:
     if tool == "real_dns":
         return "native_probe"
+    if tool == "world_monitor_discovery":
+        return "native_probe"
     if get_adapter(tool) is not None:
         return "adapter"
     return "legacy"
@@ -163,7 +165,10 @@ def execute_tool(db, scan, tool: str, config: dict, job, state: dict) -> dict:
     from app.orchestration import events
 
     attempt = 0
-    if not stage_enabled(config, tool):
+    # ``world_monitor_discovery`` is conditional and records its own precise
+    # honest state (not_configured vs disabled), so it is routed to its runner
+    # instead of the generic disabled gate.
+    if tool != "world_monitor_discovery" and not stage_enabled(config, tool):
         _save_result(db, scan.id, tool, {"tool": tool, "status": "skipped",
                                          "log": f"[{tool}] DISABLED by scan configuration."})
         ex = _begin_execution(db, scan, tool, 1)
@@ -184,6 +189,8 @@ def execute_tool(db, scan, tool: str, config: dict, job, state: dict) -> dict:
         return _run_tcp_probe(db, scan, tool, config, job, state, started)
     if tool == "real_http":
         return _run_http_probe(db, scan, tool, config, job, state, started)
+    if tool == "world_monitor_discovery":
+        return _run_world_monitor_discovery(db, scan, tool, config, job, started)
     if tool in _LEGACY_RUNNERS:
         return _run_legacy(db, scan, tool, config, job, started)
     if get_adapter(tool) is not None:
@@ -256,7 +263,11 @@ def _run_http_probe(db, scan, tool, config, job, state, started) -> dict:
     return {"tool": tool, "status": "success", "observations": observations, "log": log}
 
 
+# ---------------------------------------------------------------------------
+# Phase 8 World Monitor discovery (explicit configuration only)
+# ---------------------------------------------------------------------------
 def _persist_observations(db, scan, tool: str, observations: list):
+    """Persist legacy probe observation dicts (kind/subject/data/raw shape)."""
     from database.models import Observation
 
     for o in observations:
@@ -269,6 +280,180 @@ def _persist_observations(db, scan, tool: str, observations: list):
             raw_output=clip(o.get("raw") or ""),
         ))
     db.flush()
+
+
+def _wm_guard(db, scan):
+    """Scope guard confining WM probes to the deployment hosts + project scope.
+
+    Mirrors ``app.assess.engine._scope_guard`` and the router guard: the
+    configured World Monitor hosts and the project's declared scope/assets are
+    authorized; everything else is refused before any socket is opened.
+    """
+    from app.core.auth import is_target_in_scope
+    from app.http.fingerprints import host_of
+    from database.models import Asset, Project
+
+    project = db.query(Project).filter(Project.id == scan.project_id).first()
+    assets = db.query(Asset).filter(Asset.project_id == scan.project_id).all()
+    allowed_hosts = {host_of(u).lower() for u in
+                     (scan.scan_config or {}).get("world_monitor", {}).values() if isinstance(u, str) and host_of(u)}
+
+    def guard(url: str) -> bool:
+        host = host_of(url)
+        if not host:
+            return False
+        if host == scan.target:
+            return True
+        if host.lower() in allowed_hosts:
+            return True
+        return bool(project and is_target_in_scope(host, project, assets))
+
+    return guard
+
+
+def _wm_target_config(db, scan) -> dict | None:
+    """Resolve the World Monitor deployment to probe, or None when not configured.
+
+    Priority: an explicitly referenced registered target (config.world_monitor.
+    target_id, owned by the scan's project), else an explicitly declared
+    configuration (config.world_monitor.base_url).  Cross-host mixes are refused
+    exactly like the API router refuses them.
+    """
+    from app.http.fingerprints import host_of
+    from database.models import Project, WorldMonitorTarget
+
+    wm = (scan.scan_config or {}).get("world_monitor") or {}
+    if not isinstance(wm, dict):
+        return None
+
+    target_id = wm.get("target_id")
+    if target_id is not None:
+        target = db.query(WorldMonitorTarget).filter(WorldMonitorTarget.id == target_id).first()
+        if target is None:
+            return None
+        owned = db.query(Project).filter(Project.id == target.project_id,
+                                         Project.user_id == scan_user_id(db, scan)).first()
+        if owned is None:
+            return None
+        return {"target_id": target.id, "base_url": target.base_url,
+                "api_base_url": target.api_base_url, "openapi_url": target.openapi_url,
+                "explicit": False}
+
+    base_url = str(wm.get("base_url") or "").strip().rstrip("/")
+    if not base_url:
+        return None
+    allowed = {host_of(base_url).lower()}
+    for key in ("api_base_url", "openapi_url"):
+        value = str(wm.get(key) or "").strip().rstrip("/") or None
+        if value and host_of(value).lower() not in allowed:
+            return None
+    return {"target_id": wm.get("target_id") or 0, "base_url": base_url,
+            "api_base_url": str(wm.get("api_base_url") or "").strip().rstrip("/") or None,
+            "openapi_url": str(wm.get("openapi_url") or "").strip().rstrip("/") or None,
+            "explicit": True}
+
+
+def scan_user_id(db, scan):
+    from database.models import Project
+    project = db.query(Project).filter(Project.id == scan.project_id).first()
+    return getattr(project, "user_id", None)
+
+
+def _run_world_monitor_discovery(db, scan, tool, config, job, started) -> dict:
+    """Probe an explicitly configured World Monitor deployment.
+
+    Honest states: when no World Monitor configuration is present, the tool is
+    recorded as ``skipped`` (never simulated success).  When configured, the
+    deployment is discovered over real sockets and every fact enters the
+    observation pipeline through ``build_observation`` with
+    provenance ``source=world_monitor``.
+    """
+    from app.orchestration import events
+
+    from app.integrations.world_monitor import WorldMonitorProvider
+    from app.integrations.world_monitor.discovery import TargetConfig
+    from app.integrations.world_monitor import normalizers
+    from database.models import Observation
+
+    tools_cfg = (config or {}).get("tools") or {}
+    if tools_cfg.get(tool) is False:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        ex = _begin_execution(db, scan, tool, 1)
+        _finish_execution(db, ex, status="skipped", duration_ms=duration_ms,
+                          termination_reason="disabled by scan configuration")
+        _save_result(db, scan.id, tool, {
+            "tool": tool, "status": "skipped",
+            "log": f"[{tool}] DISABLED by scan configuration."})
+        events.emit_tool(db, scan.id, tool, "skipped", attempt=1)
+        return {"tool": tool, "status": "skipped"}
+
+    wm = _wm_target_config(db, scan)
+    if wm is None:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        ex = _begin_execution(db, scan, tool, 1)
+        _finish_execution(db, ex, status="skipped", duration_ms=duration_ms,
+                          termination_reason="no World Monitor configuration supplied")
+        db.add(Observation(
+            scan_id=scan.id,
+            tool_name=tool,
+            kind="wm_not_configured",
+            subject=scan.target,
+            data_json={"status": "not_configured",
+                       "reason": "no world_monitor config (target_id or base_url) in scan configuration",
+                       "source": "world_monitor"},
+            raw_output="[world_monitor_discovery] Skipped: no World Monitor deployment configured for this scan.",
+        ))
+        db.flush()
+        _save_result(db, scan.id, tool, {
+            "tool": tool, "status": "skipped",
+            "log": "[world_monitor_discovery] Skipped: no World Monitor deployment configured for this scan.",
+        })
+        events.emit_tool(db, scan.id, tool, "skipped", attempt=1,
+                         detail={"reason": "not_configured"})
+        return {"tool": tool, "status": "skipped"}
+
+    guard = _wm_guard(db, scan)
+    provider = WorldMonitorProvider(guard)
+    config_disc = TargetConfig(
+        base_url=wm["base_url"],
+        api_base_url=wm["api_base_url"],
+        openapi_url=wm["openapi_url"],
+    )
+    result = provider.discover(config_disc)
+    target_id = wm["target_id"]
+    user_id = str(scan_user_id(db, scan) or "")
+
+    observations = normalizers.health_observations(
+        scan_id=scan.id, target_id=target_id, subject=result.health.url if result.health else scan.target,
+        tool_name=tool, health=result.health, user_id=user_id,
+    )
+    for ep in result.endpoints:
+        observations.append(normalizers.endpoint_observation(
+            scan_id=scan.id, target_id=target_id, endpoint=ep,
+            source_url=result.health.url if result.health else scan.target,
+            tool_name=tool, user_id=user_id,
+        ))
+
+    parsed = 0
+    for kwargs in observations:
+        db.add(Observation(**kwargs))
+        db.flush()
+        parsed += 1
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    ex = _begin_execution(db, scan, tool, 1)
+    _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
+                      parsed_observations=parsed,
+                      termination_reason=result.error)
+    log = (f"[world_monitor_discovery] {result.target_status}; "
+           f"{len(result.endpoints)} endpoint(s) from {result.openapi_status or 'no'} OpenAPI; "
+           f"{len(observations)} observation(s).")
+    _save_result(db, scan.id, tool, {"status": "success", "log": log})
+    events.emit_tool(db, scan.id, tool, "completed", attempt=1,
+                     detail={"observations": len(observations),
+                             "target_status": result.target_status,
+                             "endpoint_count": len(result.endpoints)})
+    return {"tool": tool, "status": "success", "observations": observations, "log": log}
 
 
 # ---------------------------------------------------------------------------

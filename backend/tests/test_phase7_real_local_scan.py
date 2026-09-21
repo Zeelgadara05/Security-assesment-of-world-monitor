@@ -276,3 +276,32 @@ def test_missing_tools_are_gaps_never_successes(real_scan):
         assert set(pre.get("missing") or []) .issuperset(set(missing_planned))
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# 3. Phase 8.5: the real report exposes SIH-area coverage + provenance
+# ---------------------------------------------------------------------------
+def test_real_scan_report_exposes_sih_coverage_and_provenance(real_scan):
+    scan_id = real_scan
+    from app.reporting import builder
+
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        report = builder.build(db, scan)
+        payload = report.json_content
+
+        sih = payload["sih_coverage"]
+        assert sih["framework"] == "SIH26163"
+        assert len(sih["areas"]) == 7
+        exercised = {a["key"] for a in sih["areas"] if a["executed"] > 0}
+        assert exercised, "real assessment ledger must exercise at least one SIH area"
+        assert exercised & {"client_side", "secure_communication", "data_protection"}, exercised
+
+        provenances = {f["provenance"] for f in payload["findings"]}
+        assert "validated" in provenances, "real validators must yield validated findings"
+
+        assert "SIH26163 Security-Area Coverage" in report.markdown
+        assert "**Provenance:** validated" in report.markdown
+    finally:
+        db.close()

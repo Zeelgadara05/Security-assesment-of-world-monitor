@@ -9,15 +9,14 @@ interface ErrorStateProps {
 }
 
 export const ErrorState: React.FC<ErrorStateProps> = ({ title = 'Could not load data', message, onRetry }) => (
-  <div className="flex flex-col items-center justify-center text-center px-6 py-12 border border-critical/30 rounded-md bg-critical/5">
-    <div className="w-10 h-10 rounded-md border border-critical/30 bg-surface-2 flex items-center justify-center text-critical mb-4">
-      <AlertCircle className="w-4 h-4" aria-hidden="true" />
+  <div className="flex flex-col items-center justify-center rounded-2xl border border-critical/25 bg-critical/[0.05] px-6 py-12 text-center">
+    <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-critical/30 bg-surface-2 text-critical shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+      <AlertCircle className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
     </div>
-    <h3 className="text-sm font-semibold text-text">{title}</h3>
-    <p className="text-[12px] text-muted mt-1.5 max-w-sm leading-relaxed break-words">{message}</p>
+    <h3 className="display text-[15px] font-semibold text-text">{title}</h3>
+    <p className="mt-2 max-w-[46ch] break-words text-[12.5px] leading-relaxed text-muted">{message}</p>
     {onRetry && (
-      <Button variant="outline" size="sm" onClick={onRetry} className="mt-5">
-        <RotateCcw className="w-3 h-3" aria-hidden="true" />
+      <Button variant="outline" size="sm" onClick={onRetry} className="mt-6" trailing={<RotateCcw className="h-3 w-3" strokeWidth={1.5} />}>
         Retry
       </Button>
     )}

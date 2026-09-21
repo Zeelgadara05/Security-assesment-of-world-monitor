@@ -16,14 +16,14 @@ const TYPE_ICON: Record<string, React.ReactNode> = {
 };
 
 const ScopeNode = memo(({ data }: any) => (
-  <div className="px-3 py-2 border border-accent/50 bg-accent/10 rounded text-[11px] font-mono text-accent">
+  <div className="rounded-xl border border-accent/50 bg-accent/10 px-3 py-2 font-mono text-[11px] text-accent">
     <Handle type="source" position={Position.Bottom} className="!bg-accent !w-1.5 !h-1.5" />
     {data.label}
   </div>
 ));
 
 const AssetNode = memo(({ data }: any) => (
-  <div className="px-3 py-1.5 border border-line bg-surface-2 rounded text-[11px] font-mono text-text shadow-sm">
+  <div className="rounded-xl border border-line bg-surface-2 px-3 py-1.5 font-mono text-[11px] text-text shadow-sm">
     <Handle type="target" position={Position.Top} className="!bg-line-strong !w-1.5 !h-1.5" />
     {data.label}
   </div>
@@ -154,9 +154,9 @@ export const Assets: React.FC = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         {/* Graph */}
-        <div className="xl:col-span-7 panel rounded-md p-3 min-h-[420px]">
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted px-1 pb-2">Topology</h2>
-          <div className="h-[380px] bg-bg border border-line rounded overflow-hidden">
+        <div className="panel min-h-[420px] p-4 xl:col-span-7">
+          <h2 className="px-1 pb-2.5 text-[12.5px] font-semibold text-text">Topology</h2>
+          <div className="h-[380px] overflow-hidden rounded-xl border border-line bg-bg">
             {total === 0 && !loading ? (
               <EmptyState
                 icon={<Boxes className="w-4 h-4" aria-hidden="true" />}
@@ -188,9 +188,9 @@ export const Assets: React.FC = () => {
 
         {/* Asset table */}
         <div className="xl:col-span-5">
-          <div className="panel rounded-md overflow-hidden">
-            <div className="px-4 pt-4 pb-2">
-              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Discovered assets</h2>
+          <div className="panel overflow-hidden">
+            <div className="px-5 pt-5 pb-2">
+              <h2 className="text-[12.5px] font-semibold text-text">Discovered assets</h2>
             </div>
             <div className="max-h-[420px] overflow-y-auto">
               <DataTable
@@ -245,8 +245,8 @@ export const Assets: React.FC = () => {
 };
 
 const Tile: React.FC<{ label: string; value: number }> = ({ label, value }) => (
-  <div className="panel rounded-md p-3">
-    <p className="eyebrow mb-0.5">{label}</p>
-    <p className="text-lg font-semibold text-text">{value}</p>
+  <div className="panel p-4">
+    <p className="eyebrow mb-1.5">{label}</p>
+    <p className="tnum text-[24px] font-semibold leading-none tracking-tight text-text">{value}</p>
   </div>
 );

@@ -110,6 +110,17 @@ class Scan(Base):
     queue_started_at = Column(DateTime, nullable=True)
     queue_waited_ms = Column(Integer, nullable=True)
 
+    # Phase 8.5 product taxonomy: an assessment follows exactly one authorized
+    # path -- "world_monitor" (a registered World Monitor deployment) or
+    # "custom_target" (an operator-supplied authorized target). Persisted for
+    # the record; enforcement remains the server-side scope guard.
+    assessment_type = Column(String(50), nullable=True, index=True)
+    # Phase 8.5 authorization acknowledgement: the operator asserted they are
+    # authorized to assess the target. Audit record only -- the server-side
+    # scope guard, never this flag, is the actual control.
+    authorization_acknowledged = Column(Boolean, nullable=True)
+    authorization_acknowledged_at = Column(DateTime, nullable=True)
+
     executions = relationship("ToolExecution", back_populates="scan", cascade="all, delete-orphan")
     scan_stages = relationship("ScanStage", back_populates="scan", cascade="all, delete-orphan")
     scan_events = relationship("ScanEvent", back_populates="scan", cascade="all, delete-orphan")
@@ -594,3 +605,90 @@ class MLInference(Base):
     generated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     scan = relationship("Scan")
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 World Monitor integration
+#
+# A WorldMonitorTarget is an explicitly configured, authorized World Monitor
+# deployment belonging to one project.  Its status is never ``secure`` or
+# ``insecure``: connectivity is assessed (not_configured / checking /
+# reachable / unavailable / partially_discovered / discovered) while security
+# posture comes only from the assessment findings derived from its real
+# observations.  The API-endpoint table is the normalized inventory produced by
+# OpenAPI/API discovery; every endpoint that later yields an observation keeps
+# its observation_id so the evidence chain stays traceable.
+# ---------------------------------------------------------------------------
+WORLD_MONITOR_STATUS_NOT_CONFIGURED = "not_configured"
+WORLD_MONITOR_STATUS_CHECKING = "checking"
+WORLD_MONITOR_STATUS_REACHABLE = "reachable"
+WORLD_MONITOR_STATUS_UNAVAILABLE = "unavailable"
+WORLD_MONITOR_STATUS_PARTIALLY_DISCOVERED = "partially_discovered"
+WORLD_MONITOR_STATUS_DISCOVERED = "discovered"
+
+WORLD_MONITOR_STATUSES = (
+    WORLD_MONITOR_STATUS_NOT_CONFIGURED,
+    WORLD_MONITOR_STATUS_CHECKING,
+    WORLD_MONITOR_STATUS_REACHABLE,
+    WORLD_MONITOR_STATUS_UNAVAILABLE,
+    WORLD_MONITOR_STATUS_PARTIALLY_DISCOVERED,
+    WORLD_MONITOR_STATUS_DISCOVERED,
+)
+
+
+class WorldMonitorTarget(Base):
+    """One authorized World Monitor deployment configured for assessment.
+
+    ``base_url`` is the health-check root; ``api_base_url``/``openapi_url`` are
+    optional and only ever taken from explicit configuration (never guessed).
+    ``status`` reflects connectivity/discovery (see constants above);
+    ``health_json``/``discovery_json`` hold the real probe results and
+    ``discovered_version`` any version metadata observed at runtime.
+    """
+    __tablename__ = "world_monitor_targets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    base_url = Column(String(255), nullable=False)
+    api_base_url = Column(String(255), nullable=True)
+    openapi_url = Column(String(255), nullable=True)
+    status = Column(String(50), nullable=False, default=WORLD_MONITOR_STATUS_NOT_CONFIGURED)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_discovery_at = Column(DateTime, nullable=True)
+    discovered_version = Column(String(100), nullable=True)
+    health_json = Column(JSON, nullable=True)
+    discovery_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    project = relationship("Project")
+    api_endpoints = relationship("WorldMonitorAPIEndpoint", back_populates="target",
+                                 cascade="all, delete-orphan")
+
+
+class WorldMonitorAPIEndpoint(Base):
+    """One normalized endpoint discovered from a World Monitor deployment.
+
+    Only real, observed endpoints are stored.  ``source`` records how the
+    endpoint was found (openapi | frontend | api_base | base_url).  When the
+    endpoint is later probed during a scan, ``observation_id`` links it to the
+    persisted Observation row that backs the evidence chain.
+    """
+    __tablename__ = "world_monitor_api_endpoints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    target_id = Column(Integer, ForeignKey("world_monitor_targets.id"), nullable=False, index=True)
+    method = Column(String(10), nullable=False)
+    path = Column(String(512), nullable=False)
+    operation_id = Column(String(255), nullable=True)
+    tags = Column(JSON, nullable=True)
+    source = Column(String(50), nullable=False, default="openapi")
+    authentication_hint = Column(String(255), nullable=True)
+    first_seen = Column(DateTime, nullable=True)
+    last_seen = Column(DateTime, nullable=True)
+    observation_id = Column(Integer, ForeignKey("observations.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    target = relationship("WorldMonitorTarget", back_populates="api_endpoints")
+    observation = relationship("Observation")

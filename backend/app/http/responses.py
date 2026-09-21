@@ -27,6 +27,7 @@ class HTTPResponse:
     tls: dict[str, Any] | None = None
     request: dict[str, Any] | None = None
     error: str | None = None
+    cookies: list[dict[str, Any]] = field(default_factory=list)
 
     # -- convenience ---------------------------------------------------------
     def header(self, name: str) -> str | None:
@@ -65,6 +66,7 @@ class HTTPResponse:
             "redirect_chain": list(self.redirect_chain),
             "tls": self.tls,
             "error": self.error,
+            "cookies": list(self.cookies),
         }
 
     def fingerprint_fields(self) -> dict[str, Any]:

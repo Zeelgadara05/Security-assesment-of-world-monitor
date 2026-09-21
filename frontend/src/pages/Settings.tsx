@@ -25,49 +25,27 @@ export const Settings: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Credentials */}
         <div className="lg:col-span-2 space-y-4">
-          <section className="panel rounded-md p-4">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-3">
+          <section className="panel p-5">
+            <h2 className="flex items-center gap-1.5 mb-3 text-[12.5px] font-semibold text-text">
               <ServerCog className="w-3.5 h-3.5" aria-hidden="true" />
-              External API credentials
+              External providers
             </h2>
-            <div className="border border-line rounded p-3 text-[11.5px] text-muted space-y-2 leading-relaxed bg-bg">
+            <div className="space-y-2 rounded-xl border border-line bg-bg p-3.5 text-[11.5px] leading-relaxed text-muted">
               <p>
-                This build does not configure third-party AI or intelligence APIs. Provider keys
-                (OpenAI/Groq/Shodan) are placeholders only and are never stored, sent, or transmitted by this UI.
+                No third-party AI or intelligence provider is wired into this build. The ML
+                advisory layer ships without a model and only reports coverage-gap guidance
+                derived from persisted assessment state.
               </p>
               <p>
-                Scanning tool availability (subfinder, nmap, nuclei, …) and orchestration behavior are controlled
-                by environment variables on the backend (<code className="font-mono">SIMULATION_MODE</code>,
+                Scanner availability (subfinder, nmap, nuclei, …) and orchestration behaviour
+                are controlled by backend environment variables (<code className="font-mono">SIMULATION_MODE</code>,
                 scanner binaries on the server PATH, <code className="font-mono">ADMIN_*</code> bootstrap config).
               </p>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-              {['OpenAI compatible API key', 'Groq API key'].map((label) => (
-                <div key={label} className="space-y-1.5">
-                  <label className="block text-[11.5px] font-medium text-muted">{label}</label>
-                  <input
-                    type="password"
-                    readOnly
-                    placeholder="•••••••••••••• (unused placeholder)"
-                    className="w-full bg-bg border border-line rounded px-3 py-2 text-[12px] text-faint placeholder:text-faint/60 cursor-not-allowed"
-                  />
-                </div>
-              ))}
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="block text-[11.5px] font-medium text-muted">Shodan API key</label>
-                <input
-                  type="password"
-                  readOnly
-                  placeholder="sh-•••••••••••• (unused placeholder)"
-                  className="w-full bg-bg border border-line rounded px-3 py-2 text-[12px] text-faint placeholder:text-faint/60 cursor-not-allowed"
-                />
-              </div>
-            </div>
           </section>
 
-          <section className="panel rounded-md p-4">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-3">
+          <section className="panel p-5">
+            <h2 className="flex items-center gap-1.5 mb-3 text-[12.5px] font-semibold text-text">
               <Lock className="w-3.5 h-3.5" aria-hidden="true" />
               Execution guardrails
             </h2>
@@ -78,7 +56,7 @@ export const Settings: React.FC = () => {
                 <code className="font-mono">SIMULATION_MODE</code> variable.
               </p>
               <p className="text-[11.5px] text-faint leading-relaxed">
-                Strict input filtering: targets are validated to domains, IPv4, and CIDR. Scan scope enforcement
+                Strict input filtering: targets are validated to domains, IPv4, and CIDR. Scope enforcement
                 rejects out-of-scope targets with HTTP 403.
               </p>
             </div>
@@ -87,8 +65,8 @@ export const Settings: React.FC = () => {
 
         {/* Account */}
         <div className="space-y-4">
-          <section className="panel rounded-md p-4">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-3">
+          <section className="panel p-5">
+            <h2 className="flex items-center gap-1.5 mb-3 text-[12.5px] font-semibold text-text">
               <UserRound className="w-3.5 h-3.5" aria-hidden="true" />
               Session
             </h2>
@@ -104,8 +82,8 @@ export const Settings: React.FC = () => {
             </dl>
           </section>
 
-          <section className="panel rounded-md p-4 space-y-2">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-2">
+          <section className="panel p-5 space-y-2">
+            <h2 className="flex items-center gap-1.5 mb-2 text-[12.5px] font-semibold text-text">
               <Shield className="w-3.5 h-3.5" aria-hidden="true" />
               Scanner availability
             </h2>
@@ -116,7 +94,7 @@ export const Settings: React.FC = () => {
             </p>
             <Link
               to="/tools"
-              className="inline-flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 font-medium no-underline"
+              className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-accent no-underline transition-colors duration-500 ease-spring hover:text-accent-bright"
             >
               Open tool health →
             </Link>

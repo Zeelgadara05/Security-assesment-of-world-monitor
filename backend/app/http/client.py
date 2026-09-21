@@ -179,6 +179,9 @@ class SafeHttpClient:
             from app.http.fingerprints import fetch_tls_info
 
             tls = fetch_tls_info(url, timeout=self.limits.request_timeout)
+        from app.http.cookies import extract_cookie_attributes
+
+        set_cookie = headers.get("set-cookie") or headers.get("Set-Cookie")
         return HTTPResponse(
             status=int(getattr(raw_resp, "status", getattr(raw_resp, "code", 0)) or 0),
             url=url,
@@ -189,6 +192,7 @@ class SafeHttpClient:
             content_type=content_type,
             tls=tls,
             request=record.to_dict(),
+            cookies=extract_cookie_attributes(set_cookie),
         )
 
     # -- verb helpers --------------------------------------------------------

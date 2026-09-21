@@ -116,26 +116,26 @@ export const AIChat: React.FC = () => {
       <PageHeader
         eyebrow="Intelligence / Assistant"
         title="Assessment Assistant"
-        description="Deterministic, evidence-driven Q&A over persisted scan findings. No fabricated answers."
+        description="Deterministic, evidence-driven Q&A over persisted assessment findings. No fabricated answers."
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Session selector */}
         <div className="lg:col-span-1">
-          <div className="panel rounded-md overflow-hidden">
+          <div className="panel overflow-hidden">
             <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Scan sessions</h2>
+              <h2 className="text-[12.5px] font-semibold text-text">Assessment sessions</h2>
               <span className="mono-cell text-[10px] text-faint">{scans.length}</span>
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-2">
               {listLoading ? (
                 <div className="space-y-2">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="skeleton h-12 rounded" />
+                    <div key={i} className="skeleton h-12 rounded-xl" />
                   ))}
                 </div>
               ) : scans.length === 0 ? (
-                <p className="text-[11px] text-faint px-2 py-4">No sessions available. Run a scan.</p>
+                <p className="text-[11px] text-faint px-2 py-4">No sessions available. Run an assessment.</p>
               ) : (
                 <ul className="space-y-1">
                   {scans.map((scan) => {
@@ -144,13 +144,13 @@ export const AIChat: React.FC = () => {
                       <li key={scan.id}>
                         <button
                           onClick={() => handleSelectScan(scan.id)}
-                          className={`w-full text-left rounded px-3 py-2.5 border-l-2 transition-colors cursor-pointer ${
+                          className={`w-full cursor-pointer rounded-xl border-l-2 px-3 py-2.5 text-left transition-colors duration-500 ease-spring ${
                             active ? 'bg-surface-2 border-accent' : 'border-transparent hover:bg-surface-2/60'
                           }`}
                         >
                           <span className="block text-[12px] font-medium text-text truncate">{scan.target}</span>
                           <div className="flex items-center justify-between text-[10px] text-faint mt-0.5">
-                            <span>scan #{scan.id}</span>
+                            <span>assessment #{scan.id}</span>
                             <span>score: {scan.security_score ?? '—'}</span>
                           </div>
                         </button>
@@ -164,20 +164,20 @@ export const AIChat: React.FC = () => {
         </div>
 
         {/* Chat window */}
-        <div className="lg:col-span-3 panel rounded-md flex flex-col min-h-0" style={{ height: 640 }}>
+        <div className="lg:col-span-3 panel flex flex-col min-h-0" style={{ height: 640 }}>
           <div className="flex items-center gap-2 px-4 pt-3 pb-2 border-b border-line">
             <MessageSquareText className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">Conversation</h2>
+            <h2 className="text-[12.5px] font-semibold text-text">Conversation</h2>
             {selectedScanId && (
-              <span className="mono-cell text-[10px] text-faint ml-2">scan #{selectedScanId}</span>
+              <span className="mono-cell text-[10px] text-faint ml-2">assessment #{selectedScanId}</span>
             )}
           </div>
 
           <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
             {messages.length === 0 && !loading ? (
               <div className="h-full flex flex-col justify-center items-center text-center space-y-4 max-w-md mx-auto">
-                <div className="w-12 h-12 rounded-md border border-line bg-surface-2 flex items-center justify-center text-accent">
-                  <Sparkles className="w-5 h-5" strokeWidth={1.75} aria-hidden="true" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-surface-2 text-accent">
+                  <Sparkles className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
                 </div>
                 <div>
                   <h4 className="text-[13px] font-semibold text-text">Ask about persisted vulnerabilities</h4>
@@ -197,7 +197,7 @@ export const AIChat: React.FC = () => {
                           setInput(q);
                         }
                       }}
-                      className="text-left text-[11px] text-muted bg-surface-2 hover:bg-line border border-line p-2.5 rounded transition-colors cursor-pointer"
+                      className="cursor-pointer rounded-xl border border-line bg-surface-2 p-3 text-left text-[11px] text-muted transition-colors duration-500 ease-spring hover:border-line-strong hover:text-text"
                     >
                       {q}
                     </button>
@@ -208,7 +208,7 @@ export const AIChat: React.FC = () => {
               messages.map((m, idx) => (
                 <div key={idx} className={`flex gap-3 max-w-[85%] ${m.role === 'user' ? 'ml-auto flex-row-reverse' : ''}`}>
                   <div
-                    className={`w-7 h-7 rounded shrink-0 border flex items-center justify-center ${
+                    className={`h-7 w-7 shrink-0 rounded-lg border flex items-center justify-center ${
                       m.role === 'user' ? 'bg-surface-2 border-line text-accent' : 'bg-surface-2 border-line text-muted'
                     }`}
                   >
@@ -219,7 +219,7 @@ export const AIChat: React.FC = () => {
                     )}
                   </div>
                   <div
-                    className={`rounded px-3.5 py-2.5 text-[12px] leading-relaxed whitespace-pre-wrap ${
+                    className={`rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed whitespace-pre-wrap ${
                       m.role === 'user' ? 'bg-surface-2 text-text border border-line' : 'bg-bg text-muted border border-line'
                     }`}
                   >
@@ -231,10 +231,10 @@ export const AIChat: React.FC = () => {
 
             {loading && (
               <div className="flex gap-3">
-                <div className="w-7 h-7 rounded shrink-0 border border-line bg-surface-2 text-muted flex items-center justify-center">
-                  <Bot className="w-3.5 h-3.5" aria-hidden="true" />
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-line bg-surface-2 text-muted">
+                  <Bot className="h-3.5 w-3.5" aria-hidden="true" />
                 </div>
-                <div className="bg-bg border border-line rounded px-3.5 py-2.5 text-[12px] text-faint">
+                <div className="rounded-2xl border border-line bg-bg px-3.5 py-2.5 text-[12px] text-faint">
                   Compiling context from persisted findings…
                 </div>
               </div>
@@ -250,13 +250,13 @@ export const AIChat: React.FC = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={!selectedScanId || loading}
-              className="flex-1 bg-bg border border-line rounded px-3 py-2 text-[12.5px] text-text placeholder:text-faint/70 focus:outline-none focus:border-accent/60 transition-colors disabled:opacity-50"
+              className="flex-1 rounded-xl border border-line bg-bg px-3 py-2 text-[12.5px] text-text transition-colors duration-500 ease-spring placeholder:text-faint/70 focus:border-accent/60 focus:outline-none disabled:opacity-50"
               aria-label="Ask a question"
             />
             <button
               type="submit"
               disabled={!selectedScanId || loading || !input.trim()}
-              className="inline-flex items-center justify-center gap-1 p-2 rounded bg-accent text-[#062b20] hover:bg-accent/85 disabled:opacity-45 transition-colors cursor-pointer"
+              className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-xl bg-accent p-2.5 text-[#04140e] transition-colors duration-500 ease-spring hover:bg-accent-bright disabled:opacity-45"
               aria-label="Send"
             >
               <Send className="w-4 h-4" aria-hidden="true" />

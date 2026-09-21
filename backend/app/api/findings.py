@@ -125,6 +125,90 @@ def _history(db: Session, finding_id: int) -> list[dict]:
     ]
 
 
+@router.get("")
+def list_findings(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    severity: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    sih_area: str | None = None,
+    assessment_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Cross-assessment findings for the authenticated user (ownership-scoped).
+
+    Every row is joined through scan -> project -> user, so another user's
+    findings are never returned.  Filters are applied against real persisted
+    columns; ``sih_area`` maps the SIH26163 framework onto the finding's
+    rule-level category.  Nothing is synthesized.
+    """
+    from app.assess.sih import SIH_AREAS, areas_for_category
+    from database.models import Project, Scan
+
+    if sih_area is not None and sih_area.strip().lower() not in SIH_AREAS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sih_area must be one of: {', '.join(SIH_AREAS)}.",
+        )
+
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+
+    project_ids = [p.id for p in db.query(Project).filter(Project.user_id == user.id).all()]
+    if not project_ids:
+        return {"total": 0, "limit": limit, "offset": offset, "findings": []}
+
+    query = (
+        db.query(Vulnerability, Scan)
+        .join(Scan, Vulnerability.scan_id == Scan.id)
+        .filter(Scan.project_id.in_(project_ids))
+    )
+    if assessment_id is not None:
+        query = query.filter(Vulnerability.scan_id == assessment_id)
+    if severity:
+        query = query.filter(Vulnerability.severity == severity)
+    if status:
+        query = query.filter(Vulnerability.status == status)
+    if category:
+        query = query.filter(Vulnerability.category == category)
+
+    rows = query.order_by(Vulnerability.id.desc()).all()
+    if sih_area:
+        key = sih_area.strip().lower()
+        rows = [(v, s) for (v, s) in rows if key in areas_for_category(v.category)]
+
+    total = len(rows)
+    page = rows[offset:offset + limit]
+    findings = [
+        {
+            "id": v.id,
+            "scan_id": v.scan_id,
+            "target": s.target,
+            "assessment_type": s.assessment_type,
+            "title": v.title,
+            "severity": v.severity,
+            "status": v.status or lifecycle.STATUS_CONFIRMED,
+            "state": v.state or "NEW",
+            "category": v.category,
+            "sih_areas": list(areas_for_category(v.category)),
+            "cwe": v.cwe,
+            "owasp": v.owasp,
+            "endpoint": v.endpoint,
+            "http_method": v.http_method,
+            "parameter": v.parameter,
+            "affected_component": v.affected_component,
+            "confidence": v.confidence,
+            "first_seen": v.first_seen,
+            "last_seen": v.last_seen,
+            "resolved_at": v.resolved_at,
+        }
+        for (v, s) in page
+    ]
+    return {"total": total, "limit": limit, "offset": offset, "findings": findings}
+
+
 @router.get("/{finding_id}")
 def get_finding(
     finding_id: int,
@@ -208,4 +292,4 @@ def get_finding_evidence(
     }
 
 
-__all__ = ["ACTIONS", "get_finding", "get_finding_evidence", "router"]
+__all__ = ["ACTIONS", "get_finding", "get_finding_evidence", "list_findings", "router"]

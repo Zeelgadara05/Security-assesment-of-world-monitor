@@ -13,10 +13,15 @@ Environment variables consumed:
   TOOL_PATH      Extra scanner binary directories (PATH-separated), merged
                  into the process PATH at import so scanners not on the
                  system PATH are still detected. Default: empty.
-  ADMIN_EMAIL    Bootstrap admin email. Only used when both ADMIN_EMAIL and
-                 ADMIN_PASSWORD are set and ADMIN_DISABLED != "true".
-  ADMIN_PASSWORD Bootstrap admin password (dev/self-host bootstrap only).
-  ADMIN_DISABLED Set "true" to skip the bootstrap admin seeding.
+ADMIN_EMAIL    Bootstrap admin email. Only used when both ADMIN_EMAIL and
+                  ADMIN_PASSWORD are set and ADMIN_DISABLED != "true".
+   ADMIN_PASSWORD Bootstrap admin password (dev/self-host bootstrap only).
+   ADMIN_DISABLED Set "true" to skip the bootstrap admin seeding.
+   WORLD_MONITOR_BASE_URL     Base URL of the authorized World Monitor
+                              deployment (health check root). Empty = not
+                              configured. Never guessed or defaulted.
+   WORLD_MONITOR_API_BASE_URL Optional API base path of the deployment.
+   WORLD_MONITOR_OPENAPI_URL  Optional OpenAPI document URL of the deployment.
 """
 import os
 
@@ -77,6 +82,19 @@ class Settings:
             bool(self.admin_email)
             and bool(self.admin_password)
             and not _env_bool("ADMIN_DISABLED", False)
+        )
+
+        # World Monitor deployment configuration (Phase 8). Empty means "not
+        # configured" -- the platform never guesses or fabricates these URLs.
+        # Runtime truth comes only from these values plus live probes.
+        self.world_monitor_base_url = (
+            os.getenv("WORLD_MONITOR_BASE_URL", "").strip().rstrip("/") or None
+        )
+        self.world_monitor_api_base_url = (
+            os.getenv("WORLD_MONITOR_API_BASE_URL", "").strip().rstrip("/") or None
+        )
+        self.world_monitor_openapi_url = (
+            os.getenv("WORLD_MONITOR_OPENAPI_URL", "").strip().rstrip("/") or None
         )
 
 

@@ -25,6 +25,9 @@ from database.models import User
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
+# Phase 8.5: every assessment follows exactly one authorized path.
+ASSESSMENT_TYPES = ("world_monitor", "custom_target")
+
 
 class ScanCreate(ScanRequest):
     """POST /scans payload: authorized target + optional job configuration.
@@ -50,21 +53,126 @@ class ScanCreate(ScanRequest):
     jwt_alg_none_accepted: bool | None = None
     installed_tools: list[str] | None = None
     tools_missing: list[str] | None = None
+    # Phase 8: World Monitor deployment reference for this scan.  Either a
+    # registered target id or an explicit, same-host URL configuration.
+    world_monitor: dict | None = None
+    # Phase 8.5 product taxonomy + authorization audit.  Callers that omit
+    # ``assessment_type`` keep the legacy behaviour (inferred); callers that set
+    # it explicitly must also acknowledge that they are authorized to assess.
+    assessment_type: str | None = None
+    authorization_acknowledged: bool | None = None
 
 
-def _create_and_enqueue(db: Session, user: User, target: str, config: dict | None = None) -> Scan:
+def _resolve_assessment_type(db: Session, user: User, payload: ScanCreate) -> str:
+    """Resolve + validate the Phase 8.5 assessment path before any row is created.
+
+    An explicit ``assessment_type`` is validated: a World Monitor path must
+    reference a deployment owned by the caller (or an explicit base_url), and an
+    explicit path requires the authorization acknowledgement.  When
+    ``assessment_type`` is omitted the path is inferred from the presence of a
+    world_monitor config so existing API clients keep working unchanged.
+    """
+    wm = payload.world_monitor if isinstance(payload.world_monitor, dict) else None
+    explicit = payload.assessment_type
+    if explicit is not None and explicit not in ASSESSMENT_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"assessment_type must be one of: {', '.join(ASSESSMENT_TYPES)}.",
+        )
+
+    assessment_type = explicit or ("world_monitor" if wm else "custom_target")
+
+    if assessment_type == "world_monitor":
+        if not wm or not (wm.get("target_id") or wm.get("base_url")):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A world_monitor assessment requires a registered target_id "
+                    "or an explicit base_url."
+                ),
+            )
+        target_id = wm.get("target_id")
+        if target_id is not None:
+            from database.models import WorldMonitorTarget
+            target = db.query(WorldMonitorTarget).filter(WorldMonitorTarget.id == target_id).first()
+            owned = target is not None and db.query(Project).filter(
+                Project.id == target.project_id, Project.user_id == user.id
+            ).first() is not None
+            if not owned:
+                raise HTTPException(status_code=404, detail="World Monitor target not found.")
+
+    if explicit is not None and payload.authorization_acknowledged is not True:
+        raise HTTPException(
+            status_code=422,
+            detail="authorization_acknowledged must be true to start an assessment.",
+        )
+
+    return assessment_type
+
+
+def _wm_registered_host_allowed(db, user, config, target) -> bool:
+    """A world_monitor assessment is authorized when its target is a host the
+    caller explicitly registered as an owned World Monitor deployment.
+
+    Registration is itself an explicit, audit-traced authorization act, so a
+    registered deployment host does not additionally need to be declared in
+    the project's custom scope.  Anything else still falls through to the
+    normal scope guard and is refused with 403.
+    """
+    wm = (config or {}).get("world_monitor") if isinstance(config, dict) else None
+    if not isinstance(wm, dict):
+        return False
+    from database.models import WorldMonitorTarget
+
+    def _bare_host(value: str) -> str:
+        import urllib.parse
+        parts = urllib.parse.urlsplit(value)
+        netloc = parts.netloc or parts.path
+        return netloc.split(":")[0].strip(".").lower()
+
+    target_host = _bare_host(target)
+    if not target_host:
+        return False
+
+    target_id = wm.get("target_id")
+    if target_id is not None:
+        row = db.query(WorldMonitorTarget).filter(WorldMonitorTarget.id == target_id).first()
+        if row is None:
+            return False
+        owned = (db.query(Project)
+                 .filter(Project.id == row.project_id, Project.user_id == user.id)
+                 .first() is not None)
+        if not owned:
+            return False
+        allowed = {_bare_host(row.base_url)}
+        for extra in (row.api_base_url, row.openapi_url):
+            if extra:
+                allowed.add(_bare_host(extra))
+        return target_host in allowed
+
+    base_url = wm.get("base_url")
+    if base_url:
+        return target_host == _bare_host(base_url)
+    return False
+
+
+def _create_and_enqueue(db: Session, user: User, target: str, config: dict | None = None,
+                        assessment_type: str | None = None,
+                        authorization_acknowledged: bool | None = None) -> Scan:
     """Shared creation path: scope check -> Scan(row) -> background enqueue."""
     project = get_or_create_user_project(db, user)
     assets = db.query(Asset).filter(Asset.project_id == project.id).all()
 
     if not is_target_in_scope(target, project, assets):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Target is outside the authorized scope for this project. "
-                "Add it to the project scope first (see /scans/scope)."
-            ),
-        )
+        if not (assessment_type == "world_monitor"
+                and _wm_registered_host_allowed(db, user, config, target)):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Target is outside the authorized scope for this project. "
+                    "Add it to the project scope first (see /scans/scope)."
+                ),
+            )
 
     new_scan = Scan(
         project_id=project.id,
@@ -72,6 +180,11 @@ def _create_and_enqueue(db: Session, user: User, target: str, config: dict | Non
         status="Pending",
         stage=lifecycle.QUEUED,
         scan_config=dict(config or {}),
+        assessment_type=assessment_type,
+        authorization_acknowledged=(None if authorization_acknowledged is None
+                                    else bool(authorization_acknowledged)),
+        authorization_acknowledged_at=(datetime.datetime.utcnow()
+                                       if authorization_acknowledged else None),
         logs="[System] Initializing Scan Request...\n"
     )
     db.add(new_scan)
@@ -93,13 +206,15 @@ def _create_and_enqueue(db: Session, user: User, target: str, config: dict | Non
     from app.agents.workflow import _seed_progress
     _seed_progress(db, new_scan, new_scan.scan_config, simulation)
 
-    trigger_background_scan(new_scan.id, simulation=simulation, config=new_scan.scan_config)
-
     # Phase 7: record when the scan entered the worker queue so the pipeline
-    # can measure how long it sat in queue before a worker picked it up.
+    # can measure how long it sat in queue before a worker picked it up.  This
+    # is committed BEFORE the worker is launched so the create response reports
+    # the freshly-queued row (never a stage the worker already advanced to).
     new_scan.queue_started_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(new_scan)
+
+    trigger_background_scan(new_scan.id, simulation=simulation, config=new_scan.scan_config)
 
     return new_scan
 
@@ -134,10 +249,17 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_current_user), db:
         config["installed_tools"] = list(payload.installed_tools)
     if payload.tools_missing is not None:
         config["tools_missing"] = list(payload.tools_missing)
+    if payload.world_monitor is not None:
+        config["world_monitor"] = payload.world_monitor
     if not config:
         config = None
 
-    new_scan = _create_and_enqueue(db, user, payload.target, config)
+    assessment_type = _resolve_assessment_type(db, user, payload)
+    new_scan = _create_and_enqueue(
+        db, user, payload.target, config,
+        assessment_type=assessment_type,
+        authorization_acknowledged=payload.authorization_acknowledged,
+    )
     return {
         "scan_id": new_scan.id,
         "target": new_scan.target,
@@ -145,6 +267,8 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_current_user), db:
         "stage": new_scan.stage,
         "simulation": settings.simulation_mode,
         "coverage": new_scan.coverage,
+        "assessment_type": new_scan.assessment_type,
+        "authorization_acknowledged": new_scan.authorization_acknowledged,
         "created_at": new_scan.created_at,
     }
 
@@ -182,7 +306,8 @@ def list_scans(user: User = Depends(get_current_user), db: Session = Depends(get
             "status": s.status,
             "security_score": s.security_score,
             "created_at": s.created_at,
-            "completed_at": s.completed_at
+            "completed_at": s.completed_at,
+            "assessment_type": s.assessment_type,
         }
         for s in scans
     ]
@@ -228,6 +353,8 @@ def get_scan_details(scan_id: int, user: User = Depends(get_current_user), db: S
         "created_at": scan.created_at,
         "completed_at": scan.completed_at,
         "logs": scan.logs,
+        "assessment_type": scan.assessment_type,
+        "authorization_acknowledged": scan.authorization_acknowledged,
         "vulnerabilities": [
             {
                 "id": v.id,
@@ -270,6 +397,7 @@ def coverage_overview(user: User = Depends(get_current_user), db: Session = Depe
                 "coverage": s.coverage,
                 "progress": s.progress or {},
                 "security_score": s.security_score,
+                "assessment_type": s.assessment_type,
             }
             for s in scans
         ],
@@ -456,6 +584,8 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
     vulnerabilities = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
     tool_results = db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
     observations = db.query(Observation).filter(Observation.scan_id == scan_id).count()
+    assessment_tests = _assessment_tests(db, scan_id)
+    from app.assess.sih import coverage_by_area
 
     return {
         "id": scan.id,
@@ -466,6 +596,8 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
         "coverage": scan.coverage,
         "progress": scan.progress or {},
         "scan_config": scan.scan_config or {},
+        "assessment_type": scan.assessment_type,
+        "authorization_acknowledged": scan.authorization_acknowledged,
         "created_at": scan.created_at,
         "started_at": scan.started_at,
         "completed_at": scan.completed_at,
@@ -477,7 +609,8 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
         "observations_count": observations,
         "assessment": {
             "coverage": _assessment_coverage(db, scan_id),
-            "tests": _assessment_tests(db, scan_id),
+            "tests": assessment_tests,
+            "sih": coverage_by_area(assessment_tests),
         },
         "tools": [
             {"name": tr.tool_name, "status": tr.status, "raw_output": tr.raw_output}

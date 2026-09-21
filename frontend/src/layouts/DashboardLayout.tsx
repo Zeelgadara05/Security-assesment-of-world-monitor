@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   LayoutDashboard,
   Radar,
   ShieldCheck,
+  ShieldAlert,
   Server,
   FileText,
   MessageSquareText,
@@ -15,6 +16,7 @@ import {
   Menu,
   X,
   Crosshair,
+  ArrowLeft,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
@@ -38,23 +40,28 @@ const NAV_GROUPS = [
     label: 'Operations',
     items: [
       { name: 'Overview', path: '/', icon: LayoutDashboard },
-      { name: 'New Assessment', path: '/scan/new', icon: Radar },
       { name: 'Assessments', path: '/scans', icon: ShieldCheck },
-      { name: 'Assets', path: '/assets', icon: Server },
+      { name: 'Findings', path: '/findings', icon: ShieldAlert },
       { name: 'Reports', path: '/reports', icon: FileText },
     ],
   },
   {
-    label: 'Intelligence',
+    label: 'Inventory',
+    items: [
+      { name: 'Assets', path: '/assets', icon: Server },
+      { name: 'Tools', path: '/tools', icon: Cpu },
+    ],
+  },
+  {
+    label: 'Assistant',
     items: [
       { name: 'Assessment Assistant', path: '/chat', icon: MessageSquareText },
-      { name: 'Tool Health', path: '/tools', icon: Cpu },
+      { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
     ],
   },
   {
     label: 'Workspace',
     items: [
-      { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
       { name: 'Settings', path: '/settings', icon: Settings },
     ],
   },
@@ -66,7 +73,13 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
   const [env, setEnv] = useState<{ simulation_mode: boolean } | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const reduceMotion = useReducedMotion();
+  const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    mainRef.current?.scrollTo(0, 0);
+  }, [location.pathname]);
 
   useEffect(() => {
     apiFetch('/auth/me')
@@ -102,12 +115,19 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
 
   const initials = (user?.email || '?').split('@')[0].slice(0, 2).toUpperCase();
 
-  const sidebar = (
-    <nav aria-label="Primary" className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-      <ul className="space-y-5">
+  const navBody = (
+    <div className="flex flex-1 flex-col overflow-y-auto px-3 py-4">
+      <NavLink
+        to="/scan/new"
+        className="mb-5 flex items-center justify-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2.5 text-[12.5px] font-medium text-accent transition-colors duration-500 ease-spring hover:bg-accent/[0.14]"
+      >
+        <Radar className="h-[17px] w-[17px]" strokeWidth={1.5} aria-hidden="true" />
+        New Assessment
+      </NavLink>
+      <ul className="space-y-6">
         {NAV_GROUPS.map((group) => (
           <li key={group.label}>
-            <p className="eyebrow px-2 pb-2">{group.label}</p>
+            <p className="eyebrow px-3 pb-2.5">{group.label}</p>
             <ul className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
@@ -116,20 +136,28 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
                     <NavLink
                       to={item.path}
                       end={item.path === '/'}
-                      className={({ isActive }) =>
-                        `group flex items-center gap-2.5 rounded px-2.5 py-[7px] text-[12.5px] border-l-2 transition-colors ${
-                          isActive
-                            ? 'bg-surface-2 border-accent text-text font-medium'
-                            : 'border-transparent text-muted hover:bg-surface-2/60 hover:text-text'
-                        }`
-                      }
+                      className="group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-[12.5px] text-muted transition-colors duration-500 ease-spring hover:text-text"
                     >
-                      <Icon className="w-4 h-4 shrink-0 text-faint group-hover:text-text" strokeWidth={1.75} aria-hidden="true" />
-                      <span className="flex-1 min-w-0 truncate">{item.name}</span>
-                      {item.path === '/scan/new' && (
-                        <span className="hidden lg:inline-flex items-center gap-1 font-mono text-[9px] text-accent uppercase tracking-wider">
-                          scan
-                        </span>
+                      {({ isActive }) => (
+                        <>
+                          {isActive && (
+                            <motion.span
+                              layoutId="nav-active"
+                              className="absolute inset-0 rounded-xl border border-line bg-white/[0.055]"
+                              transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 480, damping: 34 }}
+                            />
+                          )}
+                          <Icon
+                            className={`relative z-10 h-[17px] w-[17px] shrink-0 transition-colors duration-500 ease-spring ${
+                              isActive ? 'text-accent' : 'text-faint group-hover:text-text'
+                            }`}
+                            strokeWidth={1.5}
+                            aria-hidden="true"
+                          />
+                          <span className={`relative z-10 min-w-0 flex-1 truncate ${isActive ? 'font-medium text-text' : ''}`}>
+                            {item.name}
+                          </span>
+                        </>
                       )}
                     </NavLink>
                   </li>
@@ -140,20 +168,21 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
         ))}
       </ul>
 
-      {/* Scope context */}
-      <div className="border border-line rounded-md bg-surface px-3 py-3">
-        <div className="flex items-center gap-1.5 mb-2">
-          <Crosshair className="w-3.5 h-3.5 text-accent" strokeWidth={1.75} aria-hidden="true" />
-          <span className="eyebrow">Authorized Scope</span>
+      <div className="mt-6 rounded-2xl border border-line bg-surface-2/70 p-3.5">
+        <div className="mb-2.5 flex items-center gap-2">
+          <Crosshair className="h-3.5 w-3.5 text-accent" strokeWidth={1.5} aria-hidden="true" />
+          <span className="eyebrow">Authorized scope</span>
         </div>
         {scope && scope.count > 0 ? (
           <>
-            <p className="text-[11px] text-muted mb-1">
+            <p className="mb-1.5 text-[11px] text-muted">
               {scope.count} declared target{scope.count === 1 ? '' : 's'}
             </p>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {scope.sample.slice(-3).map((entry) => (
-                <p key={entry} className="mono-cell text-[10px] text-faint truncate">{entry}</p>
+                <p key={entry} className="mono-cell truncate text-[10px] text-faint">
+                  {entry}
+                </p>
               ))}
               {scope.count > scope.sample.length && (
                 <p className="mono-cell text-[10px] text-faint">+{scope.count - scope.sample.length} more</p>
@@ -161,104 +190,138 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
             </div>
           </>
         ) : (
-          <p className="text-[11px] text-faint leading-relaxed">
+          <p className="text-[11px] leading-relaxed text-faint">
             No scope declared. Out-of-scope targets are rejected with 403.
           </p>
         )}
       </div>
-    </nav>
+    </div>
   );
 
-  const pageTransition = reduceMotion ? <div>{children}</div> : (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={location.pathname}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -4 }}
-        transition={{ duration: 0.22, ease: 'easeOut' }}
-      >
-        {children}
-      </motion.div>
-    </AnimatePresence>
+  const pageTransition = reduceMotion ? (
+    <div>{children}</div>
+  ) : (
+    <motion.div
+      key={location.pathname}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+      style={{ willChange: 'opacity, transform' }}
+    >
+      {children}
+    </motion.div>
   );
 
   return (
-    <div className="flex h-[100dvh] w-screen flex-col overflow-hidden bg-bg text-text font-sans">
-      {/* Top operational bar */}
-      <header className="flex items-center gap-3 border-b border-line bg-surface px-4 shrink-0" style={{ height: 52 }}>
+    <div className="flex h-[100dvh] w-full flex-col overflow-hidden text-text">
+      <header className="glass z-30 mx-2 mt-2 flex h-14 shrink-0 items-center gap-3 rounded-2xl px-3 sm:mx-3 sm:mt-3 sm:px-4">
         <button
           onClick={() => setMobileOpen((v) => !v)}
-          className="lg:hidden p-2 -ml-1 text-muted hover:text-text cursor-pointer"
+          className="-ml-1 rounded-full p-2 text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-text lg:hidden"
           aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'}
         >
-          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          {mobileOpen ? <X className="h-5 w-5" strokeWidth={1.5} /> : <Menu className="h-5 w-5" strokeWidth={1.5} />}
         </button>
 
-        {/* Brand */}
-        <NavLink to="/" className="flex items-center gap-2.5 min-w-0 hover:opacity-90 transition-opacity">
-          <span className="w-7 h-7 rounded overflow-hidden border border-line flex items-center justify-center shrink-0">
-            <img src="/logo.png" alt="" className="w-full h-full object-cover" />
+        <NavLink to="/" className="flex min-w-0 items-center gap-2.5 transition-opacity duration-500 ease-spring hover:opacity-90">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-line bg-surface-2">
+            <img src="/logo.png" alt="CyberAgent" className="h-full w-full object-cover" />
           </span>
-          <span className="hidden sm:flex flex-col leading-none">
+          <span className="hidden flex-col leading-none sm:flex">
             <span className="text-[15px] font-semibold tracking-tight">CyberAgent</span>
-            <span className="text-[9px] text-faint font-mono uppercase tracking-[0.18em] mt-0.5">Scan Platform</span>
+            <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.2em] text-faint">Assessment Platform</span>
           </span>
         </NavLink>
 
+        <button
+          onClick={() => navigate(-1)}
+          className="rounded-full p-2 text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-text"
+          aria-label="Go back"
+          title="Go back"
+        >
+          <ArrowLeft className="h-[17px] w-[17px]" strokeWidth={1.5} />
+        </button>
+
         <div className="flex-1" />
 
-        {/* Execution mode chip */}
-        <div className="hidden md:flex items-center gap-1.5 border border-line rounded px-2 py-1" title="Backend execution mode">
+        <div className="hidden items-center gap-2 rounded-full border border-line bg-white/[0.02] px-3 py-1.5 md:flex" title="Backend execution mode">
           <span className={env ? 'dot dot-ok' : 'dot dot-neutral'} />
-          <span className="mono-cell text-[10px] text-muted uppercase tracking-wider">
+          <span className="mono-cell text-[10px] uppercase tracking-wider text-muted">
             {env === null ? '…' : env.simulation_mode ? 'Simulation' : 'Live'}
           </span>
         </div>
 
-        {/* User session */}
-        <div className="flex items-center gap-2 pl-1">
-          <div className="w-8 h-8 rounded-full bg-surface-2 border border-line flex items-center justify-center text-[11px] font-semibold text-accent" aria-hidden="true">
+        <div className="flex items-center gap-2.5 pl-1">
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-line bg-surface-2 text-[11px] font-semibold text-accent"
+            aria-hidden="true"
+          >
             {initials}
           </div>
-          <div className="hidden sm:flex-col leading-tight min-w-0 max-w-[180px]">
-            <p className="text-[11px] font-medium truncate">{user?.email?.split('@')[0] || '…'}</p>
-            <p className="mono-cell text-[9px] text-faint uppercase tracking-wider">{user?.role || '…'}</p>
+          <div className="hidden min-w-0 max-w-[180px] flex-col leading-tight sm:flex">
+            <p className="truncate text-[11.5px] font-medium">{user?.email?.split('@')[0] || '…'}</p>
+            <p className="mono-cell text-[9px] uppercase tracking-wider text-faint">{user?.role || '…'}</p>
           </div>
         </div>
 
         <button
           onClick={onLogout}
-          className="p-2 text-faint hover:text-critical hover:bg-critical/10 rounded cursor-pointer transition-colors"
+          className="rounded-full p-2 text-faint transition-colors duration-500 ease-spring hover:bg-critical/10 hover:text-critical"
           aria-label="Sign out"
           title="Sign out"
         >
-          <LogOut className="w-4 h-4" strokeWidth={1.75} />
+          <LogOut className="h-[17px] w-[17px]" strokeWidth={1.5} />
         </button>
       </header>
 
-      <div className="flex flex-1 min-h-0">
-        {/* Desktop sidebar */}
-        <aside className="hidden lg:flex w-[220px] shrink-0 flex-col border-r border-line bg-surface overflow-y-auto" aria-label="Sidebar">
-          {sidebar}
+      <div className="flex min-h-0 flex-1">
+        <aside
+          className="mx-3 mb-3 mt-3 hidden w-[236px] shrink-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface/50 lg:flex"
+          aria-label="Sidebar"
+        >
+          {navBody}
         </aside>
 
-        {/* Mobile drawer */}
-        {mobileOpen && (
-          <div className="lg:hidden fixed inset-0 z-40 flex">
-            <div className="flex-1 bg-black/60" onClick={() => setMobileOpen(false)} aria-hidden="true" />
-            <aside className="w-[260px] bg-surface border-l border-line flex flex-col overflow-y-auto" aria-label="Sidebar">
-              <div className="flex items-center justify-between px-4 border-b border-line" style={{ height: 52 }}>
-                <span className="text-[13px] font-semibold">Navigation</span>
-              </div>
-              {sidebar}
-            </aside>
-          </div>
-        )}
+        <AnimatePresence>
+          {mobileOpen && (
+            <motion.div
+              className="fixed inset-0 z-50 flex lg:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div
+                className="flex-1 bg-black/70 backdrop-blur-sm"
+                onClick={() => setMobileOpen(false)}
+                aria-hidden="true"
+              />
+              <motion.aside
+                className="glass flex w-[272px] max-w-[82vw] flex-col overflow-hidden border-l border-line"
+                initial={{ x: 40, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: 40, opacity: 0 }}
+                transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
+                aria-label="Sidebar"
+              >
+                <div className="flex h-14 items-center justify-between border-b border-line px-4">
+                  <span className="text-[13px] font-semibold">Navigation</span>
+                  <button
+                    onClick={() => setMobileOpen(false)}
+                    className="rounded-full p-1.5 text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-text"
+                    aria-label="Close navigation"
+                  >
+                    <X className="h-4 w-4" strokeWidth={1.5} />
+                  </button>
+                </div>
+                {navBody}
+              </motion.aside>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Main viewport */}
-        <main className="flex-1 min-w-0 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1400px] px-4 sm:px-6 lg:px-8 py-6 lg:py-8">{pageTransition}</div>
+        <main id="main" ref={mainRef} tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{pageTransition}</div>
         </main>
       </div>
     </div>

@@ -51,23 +51,23 @@ export const KnowledgeBase: React.FC = () => {
       <PageHeader
         eyebrow="Workspace / Reference"
         title="Security knowledge base"
-        description="Reference guides for the vulnerability classes this platform reports. Static editorial content — not scan results."
+        description="Reference guides for the vulnerability classes this platform reports. Static editorial content — not assessment results."
       />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {articles.map((a) => (
-          <article key={a.id} className="panel rounded-md p-5 flex flex-col">
+          <article key={a.id} className="panel flex flex-col p-6">
             <div className="flex items-center justify-between mb-3">
               <span className="mono-cell text-[10px] text-accent border border-accent/40 bg-accent/10 rounded-full px-2 py-0.5">
                 {a.category}
               </span>
-              <BookMarked className="w-4 h-4 text-faint" strokeWidth={1.75} aria-hidden="true" />
+              <BookMarked className="h-4 w-4 text-faint" strokeWidth={1.5} aria-hidden="true" />
             </div>
 
             <h2 className="text-[13.5px] font-semibold text-text leading-snug">{a.title}</h2>
             <p className="text-[11.5px] text-muted leading-relaxed mt-2 flex-1">{a.plan}</p>
 
-            <div className="mt-4 border border-line rounded bg-bg p-3 space-y-1.5">
+            <div className="mt-4 space-y-1.5 rounded-xl border border-line bg-bg p-3.5">
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-accent">
                 <Wrench className="w-3 h-3" aria-hidden="true" />
                 <span>Standard mitigation plan</span>
@@ -78,7 +78,7 @@ export const KnowledgeBase: React.FC = () => {
             <div className="flex flex-wrap items-center gap-1.5 mt-3">
               <span className="mono-cell text-[9px] text-faint">#{a.ref}</span>
               {a.tags.map((t) => (
-                <span key={t} className="mono-cell text-[9px] text-faint border border-line rounded px-1.5 py-0.5">
+                <span key={t} className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
                   {t}
                 </span>
               ))}
@@ -87,7 +87,7 @@ export const KnowledgeBase: React.FC = () => {
         ))}
       </div>
 
-      <div className="panel rounded-md p-3 flex items-center gap-2 text-[11.5px] text-muted">
+      <div className="panel flex items-center gap-2.5 p-4 text-[11.5px] text-muted">
         <Shield className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
         <span>
           Articles align with OWASP Top 10 (2021) and the MITRE ATT&amp;CK framework. Findings link to these concepts by

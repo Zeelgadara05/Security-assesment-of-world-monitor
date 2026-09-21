@@ -10,6 +10,7 @@ import datetime
 import json
 
 from app.assess import finding_lifecycle as lifecycle
+from app.assess.sih import coverage_by_area
 from app.reporting.coverage_renderer import (
     coverage_markdown, coverage_payload, test_ledger, tool_availability,
 )
@@ -107,6 +108,7 @@ def build(db, scan) -> AssessmentReport:
         missing=cfg.get("tools_missing") or [],
     )
     limit_statement = limitations(snapshot_data, coverage, has_findings=bool(confirmed))
+    sih_coverage = coverage_by_area(tests)
 
     # --- executive summary --------------------------------------------------
     exec_md = [
@@ -116,9 +118,15 @@ def build(db, scan) -> AssessmentReport:
         f"- **Assessment status:** {status}",
         f"- **Assessment completeness:** {completeness}",
         f"- **Headline:** {headline}",
-        f"- **Confirmed findings:** {agg['total_confirmed']}   **Candidates:** {agg['total_candidates']}",
+        f"- **Validated findings (deterministic validator):** {agg['total_confirmed']}",
+        f"- **Observed candidates (evidence-backed, not yet validated):** {agg['total_candidates']}",
         f"- **Registry fingerprint:** `{registry_fingerprint or 'n/a'}`",
         f"- **Configuration fingerprint:** `{config_fingerprint}`",
+        "",
+        "Findings are classified by provenance: **validated** findings passed a "
+        "deterministic validator; **observed** candidates are backed by real "
+        "evidence but have not been validated. The ML advisory is **inferred** "
+        "guidance only and never contributes findings.",
         "",
         "This report is generated deterministically from persisted assessment state. "
         "Coverage describes the assessment performed, never a security guarantee.",
@@ -144,6 +152,8 @@ def build(db, scan) -> AssessmentReport:
                       markdown=f"**Methodology.** {methodology()}\n\nRegistry fingerprint: `{registry_fingerprint or 'n/a'}`"),
         ReportSection(id="coverage", title="Coverage & Test Ledger",
                       content=coverage_payload(coverage), markdown=coverage_markdown(coverage, tests)),
+        ReportSection(id="sih_coverage", title="SIH26163 Security-Area Coverage",
+                      content=sih_coverage, markdown=_sih_md(sih_coverage)),
         ReportSection(id="execution_platform", title="Execution Platform & Stage Ledger",
                       content=phase7_trail["execution"], markdown=phase7_md["execution"]),
         ReportSection(id="findings", title="Confirmed Findings",
@@ -190,6 +200,7 @@ def build(db, scan) -> AssessmentReport:
         "findings": rendered,
         "evidence": evidence_rows,
         "coverage": coverage_payload(coverage),
+        "sih_coverage": sih_coverage,
         "limitations": limit_statement,
         "execution_trail": phase7_trail,
     }
@@ -227,6 +238,31 @@ def build(db, scan) -> AssessmentReport:
 
 
 # --------------------------------------------------------------------------- helpers
+def _sih_md(sih: dict) -> str:
+    lines = [
+        "**Coverage by SIH26163 security area.** Derived only from the persisted "
+        "assessment-test ledger; an area with no applicable tests is reported as "
+        "*not assessed*, never as a percentage.",
+        "",
+        "| area | status | executed/applicable | coverage |",
+        "|------|--------|---------------------|----------|",
+    ]
+    for area in sih.get("areas") or []:
+        pct = f"{area['coverage_percent']}%" if area.get("coverage_percent") is not None else "not assessed"
+        lines.append(
+            f"| {area['title']} | {str(area['status']).replace('_', ' ')} | "
+            f"{area['executed']}/{area['applicable']} | {pct} |"
+        )
+    unmapped = sih.get("unmapped_categories") or {}
+    if unmapped:
+        lines += [
+            "",
+            "**Categories outside the SIH framework:** "
+            + ", ".join(f"{key} ({count})" for key, count in unmapped.items()),
+        ]
+    return "\n".join(lines)
+
+
 def _completeness_md(status, completeness, cfg, snapshot_data) -> str:
     lines = [
         f"- **Assessment status:** {status}",
@@ -451,8 +487,9 @@ def _phase7_trail_md(trail: dict) -> dict:
     if ledger["advisory"]:
         adv = ledger["advisory"]
         ledger_lines.append(
-            f"- **Advisory record:** {adv['status']} (schema {adv['feature_schema_version']}; "
-            f"no model prediction used)"
+            f"- **ML Advisory (inferred — not a finding):** status {adv['status']} "
+            f"(schema {adv['feature_schema_version']}; no model prediction used; "
+            f"advisory guidance never creates or changes a finding)"
         )
     return {"execution": ex_md, "ledger": "\n".join(ledger_lines)}
 
