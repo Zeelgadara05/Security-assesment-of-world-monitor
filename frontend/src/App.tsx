@@ -13,6 +13,7 @@ import { Settings } from './pages/Settings';
 import { ToolHealth } from './pages/ToolHealth';
 import { WorldMonitor } from './pages/WorldMonitor';
 import { Auth } from './pages/Auth';
+import { Landing } from './pages/Landing';
 import { NotFound } from './pages/NotFound';
 import { getToken, clearToken, onUnauthorized, apiFetch } from './api';
 
@@ -39,10 +40,20 @@ const App: React.FC = () => {
     }
   };
 
+  /* ---- PUBLIC GATE: real public router for visitors ---- */
   if (!isAuthenticated) {
-    return <Auth onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <Router>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/auth" element={<Auth onLoginSuccess={handleLoginSuccess} />} />
+          <Route path="*" element={<Landing />} />
+        </Routes>
+      </Router>
+    );
   }
 
+  /* ---- AUTHENTICATED GATE: product unchanged ---- */
   return (
     <Router>
       <DashboardLayout onLogout={handleLogout}>
