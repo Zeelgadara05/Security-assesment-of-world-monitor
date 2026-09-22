@@ -40,10 +40,10 @@ const NAV_GROUPS = [
   {
     label: 'Operations',
     items: [
-      { name: 'Overview', path: '/', icon: LayoutDashboard },
+      { name: 'Command Center', path: '/', icon: LayoutDashboard },
+      { name: 'World Monitor', path: '/world-monitor', icon: Globe },
       { name: 'Assessments', path: '/scans', icon: ShieldCheck },
       { name: 'Findings', path: '/findings', icon: ShieldAlert },
-      { name: 'World Monitor', path: '/world-monitor', icon: Globe },
       { name: 'Reports', path: '/reports', icon: FileText },
     ],
   },

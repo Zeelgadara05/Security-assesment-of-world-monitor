@@ -1,60 +1,61 @@
 @import "tailwindcss";
 
 /* ============================================================================
-   CyberAgent — frontend reconstruction :: Phase 9+ identity
-   "Authorized security assessment + evidence platform"
+   CyberAgent — Security Assessment Workstation
+   Editorial / near-black / acid-lime identity — reconstructed ground-up.
 
    Identity rules (hard):
-   · Every accent is derived from ONE acid/lime source (#E8FF3D family).
-   · Near-black monochrome base — cool-gray surfaces, one hue family.
-   · Severity colors stay SEMANTIC (red→yellow range), never decorative neon.
-   · NO OBSERVATION → NO EVIDENCE → NO VERIFIED FINDING. Nothing is invented.
+   · ONE accent source: acid/lime #E8FF3D. Everything loud derives from it.
+   · Severity stays SEMANTIC and distinct (never converted into lime).
+   · No fabricated telemetry, no invented CVEs, no fake evidence, no mock data.
+   · NO OBSERVATION → NO EVIDENCE → NO FINDING. Empty = honest empty.
    · Motion communicates state only; respects prefers-reduced-motion.
    ========================================================================= */
 
 @theme {
-  /* ---- Surfaces — one cool-gray family, tinted toward a single hue ---- */
-  --color-bg: #08080a;
-  --color-bg-2: #0a0b0e;
-  --color-surface: #0d0f12;
-  --color-surface-2: #131519;
-  --color-surface-3: #181b20;
-  --color-line: #202329;
-  --color-line-strong: #2c3038;
+  /* ---- Surfaces: one near-black family, cool-gray, single hue tilt ---- */
+  --color-bg: #060607;
+  --color-bg-2: #080809;
+  --color-surface: #0a0b0b;
+  --color-surface-2: #0d0e0f;
+  --color-surface-3: #111214;
+  --color-line: #1b1c1f;
+  --color-line-strong: #26272b;
 
-  /* ---- Text ---- */
-  --color-text: #eef0f0;
-  --color-muted: #a6abb3;
-  --color-faint: #6f747e;
+  --color-text: #ecece8;
+  --color-muted: #9a9a95;
+  --color-faint: #63635f;
 
-  /* ---- Single accent — acid lime. Held inside editorial restraint. ---- */
-  --color-accent: #e8ff3d;        /* the one loud color in the product */
-  --color-accent-bright: #f6ff9e;
-  --color-accent-strong: #cfe83a;
-  --color-accent-soft: rgba(232, 255, 61, 0.10-domaci);
+  /* ---- Accent — acid/lime. The single loud note in the product. ---- */
+  --color-accent: #e8ff3d;
+  --color-accent-strong: #d6f22f;
+  --color-accent-bright: #f4ff9d;
+  --color-accent-soft: rgba(232, 255, 61, 0.10);
   --color-accent-line: rgba(232, 255, 61, 0.28);
 
-  /* ---- Semantic severity — desaturated, meaningful, not festive ---- */
-  --color-critical: #ff5d5d;   /* only critical / auth errors / cancelled */
-  --color-high: #ff8a4a;       /* high severity only */
-  --color-medium: #ffcd57;     /* medium severities */
-  --color-low: #9cc8ff;        /* low severity */
-  --color-neutral: #8f949d;    /* info / informational */
+  /* ---- Severity semantics — desaturated but unmistakable ---- */
+  --color-critical: #ff5b5b;   /* verified critical findings only */
+  --color-high: #ff8f4d;       /* verified high findings */
+  --color-medium: #ffd64d;     /* medium / informational-adjacent */
+  --color-low: #8fb8ff;        /* low severity */
+  --color-neutral: #8f9091;    /* informational severity */
 
   /* ---- Type — editorial sans + technical mono ---- */
-  --font-sans: 'Geist', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', 'JetBrains Mono', monospace;
 
-  /* ---- Easing — spring, never linear ---- */
+  /* ---- Motion — spring-like, communicative, never decorative-loop ---- */
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* Elevation — tinted, diffused, single light source from above */
+  /* ---- Elevation — tinted, diffused, single light source from above ---- */
   --shadow-lift: 0 1px 0 rgba(255, 255, 255, 0.03), 0 24px 48px -36px rgba(0, 0, 0, 0.9);
-  --shadow-float: 0 36px 72px -48px rgba(0, 0, 0, 0.95);
-  --shadow-glow: 0 0 0 1px rgba(232, 255, 61, 0.2), 0 18px 42px -24px rgba(232, 255, 61, 0.22);
+  --shadow-float: 0 40px 80px -48px rgba(0, 0, 0, 0.95);
+  --shadow-glow: 0 0 0 1px rgba(232, 255, 61, 0.20), 0 18px 50px -24px rgba(232, 255, 61, 0.32);
+  --shadow-glow-strong: 0 0 0 1px rgba(232, 255, 61, 0.42), 0 0 48px -12px rgba(232, 255, 61, 0.5);
 }
 
-/* Light, refined iconography by default (no thick heavy strokes) */
+/* Light, refined iconography by default (no thick strokes) */
 .lucide {
   stroke-width: 1.5;
 }
@@ -67,36 +68,34 @@ html {
 
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100dvh;
   background-color: var(--color-bg);
   background-image:
-    radial-gradient(52% 44% at 12% -10%, rgba(232, 255, 61, 0.07), transparent 62%),
-    radial-gradient(46% 46% at 100% 0%, rgba(159, 170, 186, 0.05), transparent 58%),
-    radial-gradient(64% 56% at 50% 118%, rgba(232, 255, 61, 0.05), transparent 64%);
+    radial-gradient(58% 46% at 78% -12%, rgba(232, 255, 61, 0.06), transparent 62%),
+    radial-gradient(46% 44% at -8% 108%, rgba(232, 255, 61, 0.04), transparent 58%);
   background-attachment: fixed;
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-feature-settings: 'cv01' 1;
+  font-feature-settings: 'cv01' 1, 'ss01' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
-/* Fixed film-grain — never on scrolling content, pointer-events none */
+/* Subtle fixed grain — never on scrolling content, pointer-events none */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 60;
   pointer-events: none;
-  opacity: 0.03;
+  opacity: 0.02;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: rgba(232, 255, 61, 0.22);
-  color: #0a0b08;
+  background: rgba(232, 255, 61, 0.25);
+  color: #0a0a08;
 }
 
 :focus-visible {
@@ -111,11 +110,11 @@ body::after {
   top: 0;
   left: 50%;
   transform: translate(-50%, -140%);
-  z-index: 90;
+  z-index: 80;
   padding: 10px 18px;
   border-radius: 0 0 12px 12px;
   background: var(--color-accent);
-  color: #0a0b08;
+  color: #0a0a08;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -128,18 +127,18 @@ body::after {
 /* ---- Surfaces: double-bezel (shell + inner highlight) ---- */
 .panel {
   position: relative;
-  border-radius: 1rem;
+  border-radius: 0.875rem;
   border: 1px solid var(--color-line);
   background-color: var(--color-surface);
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 42%);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 42%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
     var(--shadow-lift);
 }
 
 .panel-2 {
   position: relative;
-  border-radius: 1rem;
+  border-radius: 0.875rem;
   border: 1px solid var(--color-line);
   background-color: var(--color-surface-2);
   background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 48%);
@@ -149,13 +148,13 @@ body::after {
 
 /* True glass — reserved for fixed / floating chrome only */
 .glass {
-  background: rgba(8, 8, 10, 0.78);
+  background: rgba(8, 8, 8, 0.78);
   border: 1px solid var(--color-line);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     var(--shadow-float);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(130%);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
 }
 
 /* ---- Typography helpers ---- */
@@ -198,6 +197,14 @@ body::after {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* ---- Editorial tech labels (mono blockquote for evidence) ---- */
+.tech {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--color-muted);
+}
+
 /* ---- Tables ---- */
 .tbl th {
   font-family: var(--font-mono);
@@ -219,7 +226,7 @@ body::after {
 }
 .tbl tbody tr {
   border-bottom: 1px solid color-mix(in oklab, var(--color-line) 60%, transparent);
-  transition: background-color 0.5s var(--ease-spring);
+  transition: background-color 0.35s var(--ease-spring);
 }
 .tbl tbody tr:hover {
   background-color: rgba(255, 255, 255, 0.03);
@@ -242,7 +249,7 @@ body::after {
 }
 .dot-ok {
   background: var(--color-accent);
-  box-shadow: 0 0 8px rgba(232, 255, 61, 0.5);
+  box-shadow: 0 0 8px rgba(232, 255, 61, 0.45);
 }
 .dot-warn {
   background: var(--color-medium);
@@ -256,7 +263,7 @@ body::after {
 
 @keyframes ca-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(232, 255, 61, 0.35); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(232, 255, 61, 0); }
+  50% { opacity: 0.5; box-shadow: 0 0 0 5px rgba(232, 255, 61, 0); }
 }
 
 /* ---- Skeleton shimmer ---- */
@@ -264,13 +271,18 @@ body::after {
   position: relative;
   overflow: hidden;
   border-radius: 6px;
-  background: linear-gradient(90deg, #141518 25%, #1a1c21 37%, #141518 63%);
-  background-size: 400% 100%;
-  animation: ca-shimmer 1.4s var(--ease-spring) infinite;
+  background: #101112;
 }
-@keyframes ca-shimmer {
-  0% { background-position: 100% 50%; }
-  100% { background-position: 0 50%; }
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  animation: ca-sweep 1.6s var(--ease-spring) infinite;
+}
+@keyframes ca-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 /* ---- Editorial density: fine numeric cells stay tabular ---- */
