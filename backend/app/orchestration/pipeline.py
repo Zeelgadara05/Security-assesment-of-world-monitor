@@ -34,7 +34,6 @@ from app.agents.workflow import (
     _persist_progress,
     _persisted_finding,
     _scan_observations,
-    generate_html_report_content,
     generate_markdown_report_content,
 )
 from app.assess import finding_rules
@@ -118,6 +117,7 @@ def orchestrate_scan_phase7(scan_id: int, simulation: bool = True,
 
         _move_state(db, scan, SM.VALIDATING, "validating candidates with deterministic engine")
         _run_validation(db, scan, config)
+        _populate_asset_graph(db, scan)
         _run_finalization(db, scan, progress, stage_rows)
 
     except ScanCancelled:
@@ -281,7 +281,14 @@ def _run_deterministic_assessment(db, scan, config, progress):
     candidates = finding_rules.deduplicate(candidates, existing_keys)
     for candidate in candidates:
         _check_cancel(scan.id)
-        db.add(_persisted_finding(scan, candidate, scan.target))
+        row = _persisted_finding(scan, candidate, scan.target)
+        db.add(row)
+        db.flush()
+        events.emit_finding_candidate(
+            db, scan.id, row.id or 0, candidate.get("title") or row.title or "",
+            candidate.get("severity") or row.severity or "",
+            candidate.get("rule_id") or row.rule_id or "",
+        )
     db.commit()
 
     findings = db.query(Vulnerability).filter(Vulnerability.scan_id == scan.id).all()
@@ -348,6 +355,10 @@ def _record_validations(db, scan):
                 completed_at=now,
                 duration_ms=0,
             ))
+            events.emit_finding_verified(
+                db, scan.id, f.id or 0, f.title or "", f.severity or "",
+                f.rule_id or f.source_test or "",
+            )
         elif status == "CANDIDATE":
             db.add(FindingValidation(
                 scan_id=scan.id,
@@ -359,6 +370,10 @@ def _record_validations(db, scan):
                 completed_at=now,
                 duration_ms=0,
             ))
+            events.emit_finding_rejected(
+                db, scan.id, f.id or 0, f.title or "",
+                f.source_tool or "", "external tool candidate: no native deterministic validator"
+            )
     candidate_endpoints = {
         f.endpoint for f in findings
         if (f.status or flc.STATUS_CANDIDATE).upper() == "CANDIDATE"
@@ -400,6 +415,76 @@ def _link_observations(db, scan):
                 db.add(FindingObservationLink(finding_id=f.id, observation_id=oid))
                 existing.add((f.id, oid))
     db.flush()
+
+
+def _populate_asset_graph(db, scan):
+    """Link every persisted observation onto a real, deduplicated asset graph.
+
+    Phase 9: each observation's ``asset_id`` points at the Asset row it
+    measured (its subject host / endpoint).  Assets are created only when a
+    real observation references them, and ``parent_asset_id``/``source`` are
+    set from real provenance.  Nothing is invented: a subject that is not an
+    endpoint (e.g. a DNS fact about the bare target) links to a host asset for
+    the scan target.
+    """
+    from app.orchestration import events
+    from database.models import Asset, Observation
+    from app.http.fingerprints import host_of
+
+    observations = (
+        db.query(Observation)
+        .filter(Observation.scan_id == scan.id)
+        .order_by(Observation.id.asc())
+        .all()
+    )
+    asset_cache: dict[str, Asset] = {}
+
+    def _find_or_create_asset(asset_type: str, value: str, *, source: str,
+                              parent: Asset | None = None) -> Asset:
+        key = (asset_type, value)
+        if key in asset_cache:
+            return asset_cache[key]
+        row = (
+            db.query(Asset)
+            .filter(Asset.project_id == scan.project_id,
+                    Asset.type == asset_type, Asset.value == value)
+            .first()
+        )
+        if row is None:
+            row = Asset(
+                project_id=scan.project_id, type=asset_type, value=value,
+                metadata_json={"source": source}, scan_id=scan.id, source=source,
+            )
+            db.add(row)
+            db.flush()
+            events.emit_asset_discovered(db, scan.id, row.id, asset_type, value, source)
+        if parent is not None and not row.parent_asset_id:
+            row.parent_asset_id = parent.id
+        asset_cache[key] = row
+        return row
+
+    host_root = _find_or_create_asset("host", scan.target, source="scan_target")
+    for obs in observations:
+        if obs.asset_id:
+            continue
+        subject = (obs.subject or scan.target)
+        if "://" in subject:
+            host = host_of(subject) or scan.target
+        else:
+            host = subject.lower()
+        if not host:
+            host = scan.target
+        host_asset = host_root
+        if host.lower() != scan.target.lower():
+            host_asset = _find_or_create_asset("host", host, source=obs.tool_name or "probe",
+                                               parent=host_root)
+        if obs.subject and "://" in obs.subject and host:
+            endpoint = _find_or_create_asset("endpoint", subject, source=obs.tool_name or "probe",
+                                             parent=host_asset)
+            obs.asset_id = endpoint.id
+        else:
+            obs.asset_id = host_asset.id
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +548,22 @@ def _build_report(db, scan, ml: dict | None):
         for o in observations
     ]
     markdown = generate_markdown_report_content(scan, findings, observations, simulation=False)
-    html = generate_html_report_content(scan, markdown)
+    sections = _sections_from_markdown(markdown)
+    from app.reporting import html_renderer, pdf_writer
+
+    generated_at = (scan.completed_at or datetime.datetime.utcnow()).isoformat() + "Z"
+    html = html_renderer.render_html(
+        sections,
+        title=f"Report - {scan.target}",
+        generated_at=generated_at,
+        fingerprint="",
+    )
+    pdf = pdf_writer.render_pdf(
+        sections,
+        title=f"Assessment Report - {scan.target}",
+        generated_at=generated_at,
+        fingerprint="",
+    )
 
     executions_payload = [
         {"tool": e.tool, "stage": e.stage, "attempt": e.attempt, "status": e.status,
@@ -508,9 +608,48 @@ def _build_report(db, scan, ml: dict | None):
             },
         },
         html_content=html,
-        pdf_content=markdown.encode("utf-8"),
+        pdf_content=pdf,
     ))
     db.commit()
+
+
+def _sections_from_markdown(markdown: str) -> list[dict]:
+    """Split a report's markdown into (id, title, markdown) section entries.
+
+    Top-level H2 headings become section boundaries; the content before the
+    first heading is kept as the opening section.
+    """
+    sections: list[dict] = []
+    current: dict | None = None
+    buffer: list[str] = []
+    for raw in markdown.split("\n"):
+        line = raw.rstrip()
+        is_h2 = bool(line.startswith("## "))
+        if is_h2 and current is not None and buffer:
+            current["markdown"] = "\n".join(buffer).strip()
+            sections.append(current)
+            buffer = []
+        if is_h2:
+            title = line[3:].strip()
+            current = {"id": _slugify(title), "title": title, "markdown": ""}
+        elif current is not None or sections:
+            buffer.append(line)
+    if current is not None:
+        current["markdown"] = "\n".join(buffer).strip()
+        sections.append(current)
+    if not sections and markdown.strip():
+        sections.append({
+            "id": "report",
+            "title": "Report",
+            "markdown": markdown.strip(),
+        })
+    return [s for s in sections if s["markdown"]]
+
+
+def _slugify(text: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "section"
 
 
 def scan_findings(db, scan):

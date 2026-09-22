@@ -11,6 +11,7 @@ import { AIChat } from './pages/AIChat';
 import { KnowledgeBase } from './pages/KnowledgeBase';
 import { Settings } from './pages/Settings';
 import { ToolHealth } from './pages/ToolHealth';
+import { WorldMonitor } from './pages/WorldMonitor';
 import { Auth } from './pages/Auth';
 import { NotFound } from './pages/NotFound';
 import { getToken, clearToken, onUnauthorized, apiFetch } from './api';
@@ -55,6 +56,7 @@ const App: React.FC = () => {
           <Route path="/chat" element={<AIChat />} />
           <Route path="/knowledge" element={<KnowledgeBase />} />
           <Route path="/tools" element={<ToolHealth />} />
+          <Route path="/world-monitor" element={<WorldMonitor />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -228,10 +228,19 @@ def _persist_observations(db, scan, report, user_id, target) -> list[dict]:
             row = Observation(**kwargs)
             db.add(row)
             db.flush()
+            _emit_observation_event(db, scan, row)
             rows.append({"id": row.id, "test_id": outcome.test_id, "endpoint": produced.subject,
                          "parameter": (produced.data or {}).get("parameter"), "request": produced.request,
                          "response": produced.response})
     return rows
+
+
+def _emit_observation_event(db, scan, row) -> None:
+    """Emit the phase-9 ``observation.created`` event after real persistence."""
+    from app.orchestration import events
+
+    events.emit_observation(db, scan.id, row.id, row.kind, row.subject,
+                            row.tool_name or "")
 
 
 def _drop_existing(db, scan, candidates):

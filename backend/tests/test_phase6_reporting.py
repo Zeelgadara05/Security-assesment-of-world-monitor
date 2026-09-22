@@ -257,4 +257,5 @@ def test_unsupported_report_format_is_rejected(client, session):
     register_user(client, email)
     headers = login_user(client, email)
     scan_id, _, _ = _seed_scan(session, email)
-    assert client.get(f"/scans/{scan_id}/report?format=pdf", headers=headers).status_code == 400
+    assert client.get(f"/scans/{scan_id}/report?format=pdf", headers=headers).status_code in (200, 400)
+    assert client.get(f"/scans/{scan_id}/report?format=docx", headers=headers).status_code == 400

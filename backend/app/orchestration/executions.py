@@ -124,6 +124,7 @@ def _finish_execution(db, ex, *, status: str, duration_ms: int,
 
 def _persist_adapter_observations(db, scan, tool: str, target: str,
                                   observations) -> int:
+    from app.orchestration import events
     from database.models import Observation
 
     count = 0
@@ -135,25 +136,30 @@ def _persist_adapter_observations(db, scan, tool: str, target: str,
             target=target,
             asset=None,
         )
-        db.add(Observation(**kwargs))
+        row = Observation(**kwargs)
+        db.add(row)
         db.flush()
+        events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
         count += 1
     return count
 
 
 def _persist_legacy_observation(db, scan, *, kind: str, subject: str,
                                 data: dict, raw: str):
+    from app.orchestration import events
     from database.models import Observation
 
-    db.add(Observation(
+    row = Observation(
         scan_id=scan.id,
         tool_name="nuclei",
         kind=kind,
         subject=(subject or scan.target)[:255],
         data_json=data or {},
         raw_output=raw or "",
-    ))
+    )
+    db.add(row)
     db.flush()
+    events.emit_observation(db, scan.id, row.id, row.kind, row.subject, "nuclei")
 
 
 def _extra_options(config: dict, tool: str) -> dict:
@@ -268,18 +274,21 @@ def _run_http_probe(db, scan, tool, config, job, state, started) -> dict:
 # ---------------------------------------------------------------------------
 def _persist_observations(db, scan, tool: str, observations: list):
     """Persist legacy probe observation dicts (kind/subject/data/raw shape)."""
+    from app.orchestration import events
     from database.models import Observation
 
     for o in observations:
-        db.add(Observation(
+        row = Observation(
             scan_id=scan.id,
             tool_name=tool,
             kind=(o.get("kind") or "probe_fact"),
             subject=o.get("subject") or scan.target,
             data_json=o.get("data") or {},
             raw_output=clip(o.get("raw") or ""),
-        ))
-    db.flush()
+        )
+        db.add(row)
+        db.flush()
+        events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
 
 
 def _wm_guard(db, scan):
@@ -436,8 +445,10 @@ def _run_world_monitor_discovery(db, scan, tool, config, job, started) -> dict:
 
     parsed = 0
     for kwargs in observations:
-        db.add(Observation(**kwargs))
+        row = Observation(**kwargs)
+        db.add(row)
         db.flush()
+        events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
         parsed += 1
 
     duration_ms = int((time.monotonic() - started) * 1000)

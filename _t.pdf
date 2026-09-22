@@ -1,0 +1,47 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /B2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 887 >>
+stream
+BT /FB2 16.0 Tf 1 0 0 1 48.0 794.0 Tm (Assessment report - target.example) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 766.0 Tm (Generated: 2026-09-22T02:14:43.033856+00:00) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 750.0 Tm (Report fingerprint: abc123) Tj ET
+BT /FB2 12.0 Tf 1 0 0 1 48.0 734.0 Tm (Executive Summary) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 712.0 Tm (Headline: analysis. Finding x is passed.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 696.0 Tm (Second paragraph here.) Tj ET
+BT /FB2 12.0 Tf 1 0 0 1 48.0 680.0 Tm (Confirmed Findings) Tj ET
+BT /FB2 12.0 Tf 1 0 0 1 48.0 658.0 Tm (F-1 \(confirmed\) - TLS issue) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 638.0 Tm (- Severity: High) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 622.0 Tm (- Endpoint: https://targ) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 48.0 606.0 Tm (CVSS: 7.5) Tj ET
+BT /F1 8 Tf 1 0 0 1 48.0 28.0 Tm (CyberAgent assessment report - page 1 - fingerprint abc123) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000001189 00000 n 
+0000001259 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1334
+%%EOF

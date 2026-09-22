@@ -11,7 +11,7 @@ from database.connection import engine, verify_schema
 from database.models import Base
 
 EXPECTED_TABLES = set(Base.metadata.tables.keys())
-HEAD_REVISION = "9a4b7c2e5f10"
+HEAD_REVISION = "72835b10a97e"
 
 
 def test_all_models_mapped_to_tables():
@@ -39,6 +39,7 @@ def test_all_models_mapped_to_tables():
         "ml_inferences",
         "world_monitor_targets",
         "world_monitor_api_endpoints",
+        "scan_attempts",
     }
 
 

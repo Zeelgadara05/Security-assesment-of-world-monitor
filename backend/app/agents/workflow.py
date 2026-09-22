@@ -192,9 +192,9 @@ def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None 
                              lambda: run_dnsx(target, hosts if hosts else [target], simulation), progress)
 
         for sub in hosts:
-            add_asset(db, scan.project_id, "domain", sub, {"status": "discovered", "source": "recon"})
+            add_asset(db, scan.project_id, "domain", sub, {"status": "discovered", "source": "recon"}, scan_id=scan.id)
         for item in dnsx_res.get("resolved", []):
-            add_asset(db, scan.project_id, "ip", item["ip"], {"domain": item["subdomain"], "source": "dnsx"})
+            add_asset(db, scan.project_id, "ip", item["ip"], {"domain": item["subdomain"], "source": "dnsx"}, scan_id=scan.id)
         db.commit()
 
         # ----------------------------------------------------
@@ -208,7 +208,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None 
                 add_asset(db, scan.project_id, "port", f"{p['port']}/{p['protocol']}", {
                     "service": p.get("service"), "product": p.get("product"),
                     "version": p.get("version"), "source": "nmap",
-                })
+                }, scan_id=scan.id)
         db.commit()
 
         # ----------------------------------------------------
@@ -222,7 +222,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None 
         whatweb_res = _run_tool(db, scan, "whatweb", enabled, simulation,
                                 lambda: run_whatweb(target, simulation), progress)
         for tech in whatweb_res.get("techs", []):
-            add_asset(db, scan.project_id, "tech", tech, {"source": "whatweb"})
+            add_asset(db, scan.project_id, "tech", tech, {"source": "whatweb"}, scan_id=scan.id)
         db.commit()
 
         # ----------------------------------------------------
@@ -622,12 +622,29 @@ def save_tool_result(db, scan_id: int, tool_name: str, result: dict, simulated: 
     db.commit()
 
 
-def add_asset(db, project_id: int, asset_type: str, value: str, metadata: dict):
-    # Avoid inserting duplicates into project assets
+def add_asset(db, project_id: int, asset_type: str, value: str, metadata: dict,
+              scan_id: int | None = None):
+    """Persist a discovered asset (deduplicated) and emit ``asset.discovered``.
+
+    ``metadata`` may carry ``source``; the Phase 9 columns (scan_id, source)
+    are populated additively when the caller provides the owning scan.
+    """
+    from app.orchestration import events
+
     existing = db.query(Asset).filter(Asset.project_id == project_id, Asset.type == asset_type, Asset.value == value).first()
-    if not existing:
-        asset = Asset(project_id=project_id, type=asset_type, value=value, metadata_json=metadata)
-        db.add(asset)
+    if existing:
+        return existing
+    asset = Asset(project_id=project_id, type=asset_type, value=value,
+                  metadata_json=metadata, scan_id=scan_id,
+                  source=(metadata or {}).get("source") or None)
+    db.add(asset)
+    db.flush()
+    if scan_id is not None:
+        events.emit_asset_discovered(
+            db, scan_id, asset.id, asset_type, value,
+            (metadata or {}).get("source") or "",
+        )
+    return asset
 
 
 def generate_markdown_report_content(scan, findings, observations, simulation=False) -> str:

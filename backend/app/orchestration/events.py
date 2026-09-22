@@ -24,9 +24,18 @@ EVENT_VALIDATION = "validation"
 EVENT_DONE = "done"
 EVENT_ERROR = "error"
 
+# Phase 9 granular, evidence-chain event types (extend, never replace).
+EVENT_ASSET = "asset.discovered"
+EVENT_OBSERVATION = "observation.created"
+EVENT_FINDING_CANDIDATE = "finding.candidate"
+EVENT_FINDING_VERIFIED = "finding.verified"
+EVENT_FINDING_REJECTED = "finding.rejected"
+
 KNOWN_EVENT_TYPES = frozenset({
     EVENT_STATE, EVENT_STAGE, EVENT_TOOL, EVENT_PREFLIGHT, EVENT_PROGRESS,
     EVENT_COVERAGE, EVENT_FINDING, EVENT_VALIDATION, EVENT_DONE, EVENT_ERROR,
+    EVENT_ASSET, EVENT_OBSERVATION,
+    EVENT_FINDING_CANDIDATE, EVENT_FINDING_VERIFIED, EVENT_FINDING_REJECTED,
 })
 
 
@@ -104,6 +113,53 @@ def emit_validation(db, scan_id: int, finding_id: int | None,
     })
 
 
+def emit_asset_discovered(db, scan_id: int, asset_id: int | None, asset_type: str,
+                          value: str, source: str = "") -> int:
+    """Emit after an asset row was persisted (``asset.discovered``)."""
+    return emit(db, scan_id, EVENT_ASSET, {
+        "asset_id": asset_id,
+        "asset_type": asset_type,
+        "value": value,
+        "source": source,
+    })
+
+
+def emit_observation(db, scan_id: int, observation_id: int, kind: str,
+                     subject: str, tool: str) -> int:
+    """Emit after an observation row was persisted (``observation.created``)."""
+    return emit(db, scan_id, EVENT_OBSERVATION, {
+        "observation_id": observation_id,
+        "kind": kind,
+        "subject": subject,
+        "tool": tool,
+    })
+
+
+def emit_finding_candidate(db, scan_id: int, finding_id: int, title: str,
+                           severity: str, rule_id: str = "") -> int:
+    return emit(db, scan_id, EVENT_FINDING_CANDIDATE, {
+        "id": finding_id, "title": title, "severity": severity,
+        "rule_id": rule_id,
+    })
+
+
+def emit_finding_verified(db, scan_id: int, finding_id: int, title: str,
+                          severity: str, validator_id: str = "") -> int:
+    return emit(db, scan_id, EVENT_FINDING_VERIFIED, {
+        "id": finding_id, "title": title, "severity": severity,
+        "validator_id": validator_id,
+    })
+
+
+def emit_finding_rejected(db, scan_id: int, finding_id: int | None,
+                          title: str = "", validator_id: str = "",
+                          reason: str = "") -> int:
+    return emit(db, scan_id, EVENT_FINDING_REJECTED, {
+        "id": finding_id, "title": title, "validator_id": validator_id,
+        "reason": reason,
+    })
+
+
 def replay(db, scan_id: int, cursor: int = 0, limit: int = 500) -> list[dict]:
     """Replay persisted events after ``cursor`` (exclusive by event id)."""
     rows = (
@@ -132,8 +188,12 @@ def replay(db, scan_id: int, cursor: int = 0, limit: int = 500) -> list[dict]:
 
 __all__ = [
     "emit", "emit_state", "emit_stage", "emit_tool", "emit_finding",
-    "emit_validation", "replay", "next_seq",
+    "emit_validation", "emit_asset_discovered", "emit_observation",
+    "emit_finding_candidate", "emit_finding_verified", "emit_finding_rejected",
+    "replay", "next_seq",
     "EVENT_STATE", "EVENT_STAGE", "EVENT_TOOL", "EVENT_PREFLIGHT",
     "EVENT_PROGRESS", "EVENT_COVERAGE", "EVENT_FINDING", "EVENT_VALIDATION",
     "EVENT_DONE", "EVENT_ERROR",
+    "EVENT_ASSET", "EVENT_OBSERVATION",
+    "EVENT_FINDING_CANDIDATE", "EVENT_FINDING_VERIFIED", "EVENT_FINDING_REJECTED",
 ]

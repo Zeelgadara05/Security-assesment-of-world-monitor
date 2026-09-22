@@ -1,11 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { ShieldAlert, X, Filter, FlaskConical } from 'lucide-react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { ShieldAlert, X, Filter, FlaskConical, GitCommitHorizontal, ExternalLink } from 'lucide-react';
 import { apiFetch } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { DataTable } from '../components/DataTable';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { formatDate, formatDateTime } from '../components/format';
+
+const TRIAGE_ACTIONS = [
+  { id: 'confirm', label: 'Confirm' },
+  { id: 'false_positive', label: 'False positive' },
+  { id: 'duplicate', label: 'Duplicate' },
+  { id: 'accepted_risk', label: 'Accepted risk' },
+  { id: 'resolve', label: 'Resolve' },
+];
 
 const SIH_AREAS: { key: string; label: string }[] = [
   { key: 'authentication', label: 'Authentication & Session Management' },
@@ -86,6 +94,10 @@ export const Findings: React.FC = () => {
     else next.delete(key);
     setParams(next, { replace: true });
   };
+
+  const handleTriageUpdated = useCallback(() => {
+    fetchFindings();
+  }, [fetchFindings]);
 
   const counts = useMemo(() => {
     const base: Record<string, number> = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
@@ -243,20 +255,26 @@ export const Findings: React.FC = () => {
       />
 
       {selected && (
-        <FindingDrawer finding={selected} onClose={() => setSelected(null)} />
+        <FindingDrawer finding={selected} onClose={() => setSelected(null)} onUpdated={handleTriageUpdated} />
       )}
     </div>
   );
 };
 
-const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void }> = ({ finding, onClose }) => {
+const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated?: (id: number) => void }> = ({ finding, onClose, onUpdated }) => {
   const [detail, setDetail] = useState<any | null>(null);
   const [error, setError] = useState('');
+  const [triageAction, setTriageAction] = useState<string>('');
+  const [triageReason, setTriageReason] = useState('');
+  const [triageBusy, setTriageBusy] = useState(false);
+  const [triageError, setTriageError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
     setError('');
+    setTriageError('');
     apiFetch(`/findings/${finding.id}`)
       .then(async (res) => (res.ok ? res.json() : Promise.reject(await res.json().catch(() => null))))
       .then((data) => !cancelled && setDetail(data))
@@ -266,13 +284,45 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void }> = ({ fi
     };
   }, [finding.id]);
 
+  const runTriage = async () => {
+    if (!triageAction) return;
+    setTriageBusy(true);
+    setTriageError('');
+    try {
+      const res = await apiFetch(`/findings/${finding.id}/triage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: triageAction, reason: triageReason || null }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(typeof errData?.detail === 'string' ? errData.detail : 'Triage failed.');
+      }
+      const data = await res.json();
+      setTriageAction('');
+      setTriageReason('');
+      setDetail((prev: any) => (prev ? { ...prev, status: data.status, state: data.state } : prev));
+      onUpdated?.(finding.id);
+    } catch (err: any) {
+      setTriageError(err.message || 'Triage failed.');
+    } finally {
+      setTriageBusy(false);
+    }
+  };
+
+  const openAssetTab = () => {
+    onClose();
+    navigate(`/scans?scan=${finding.scan_id}`);
+  };
+
   const poc = detail?.proof_of_concept;
   const cvss = detail?.cvss || {};
+  const history = Array.isArray(detail?.history) ? detail.history : [];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Finding detail">
       <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
-      <div className="glass flex h-full w-[520px] max-w-[92vw] flex-col overflow-hidden border-l border-line">
+      <div className="glass flex h-full w-[560px] max-w-[94vw] flex-col overflow-hidden border-l border-line">
         <div className="flex items-start justify-between gap-3 border-b border-line p-4">
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2">
@@ -283,6 +333,13 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void }> = ({ fi
             <p className="mono-cell mt-1 truncate text-[10px] text-faint">
               assessment #{finding.scan_id} · {finding.target || '—'}
             </p>
+            <button
+              onClick={openAssetTab}
+              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[10px] text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-accent"
+            >
+              <ExternalLink className="h-3 w-3" aria-hidden="true" />
+              Open affected assets
+            </button>
           </div>
           <button
             onClick={onClose}
@@ -387,6 +444,74 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void }> = ({ fi
               <div className="grid grid-cols-2 gap-3">
                 <KV label="First seen" value={detail.first_seen ? formatDateTime(detail.first_seen) : '—'} />
                 <KV label="Last seen" value={detail.last_seen ? formatDateTime(detail.last_seen) : '—'} />
+              </div>
+
+              {/* Verdict history timeline */}
+              {history.length > 0 && (
+                <div>
+                  <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-text">
+                    <GitCommitHorizontal className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
+                    Verdict history
+                  </p>
+                  <div className="space-y-1.5">
+                    {history.map((h: any) => (
+                      <div
+                        key={h.id}
+                        className="flex items-start gap-2 rounded-xl border border-line px-3 py-2 text-[10.5px]"
+                      >
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-[10px] text-muted">
+                            {h.from_status} <span className="text-faint">→</span> {h.to_status}
+                            <span className="ml-2 text-faint">by {h.actor || 'system'}</span>
+                          </p>
+                          <p className="mt-0.5 text-faint">{h.reason || ''}</p>
+                          <p className="mt-0.5 text-[9.5px] text-faint">{h.created_at ? formatDateTime(h.created_at) : '—'}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Operator triage */}
+              <div className="rounded-xl border border-line p-3">
+                <p className="eyebrow mb-2">Operator triage</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {TRIAGE_ACTIONS.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => setTriageAction(triageAction === a.id ? '' : a.id)}
+                      className={`mono-cell cursor-pointer rounded-full border px-2.5 py-1 text-[10px] transition-colors duration-500 ease-spring ${
+                        triageAction === a.id
+                          ? 'border-accent/60 bg-accent/10 text-accent'
+                          : 'border-line text-faint hover:text-muted'
+                      }`}
+                      disabled={triageBusy}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+                {triageAction && (
+                  <div className="mt-2 space-y-2">
+                    <input
+                      type="text"
+                      value={triageReason}
+                      onChange={(e) => setTriageReason(e.target.value)}
+                      placeholder="Reason (optional, recorded in history)"
+                      className="w-full rounded-xl border border-line bg-bg px-3 py-2 text-[11px] text-text placeholder:text-faint/70 focus:border-accent/60 focus:outline-none"
+                    />
+                    {triageError && <p className="text-[10.5px] text-critical">{triageError}</p>}
+                    <button
+                      onClick={runTriage}
+                      disabled={triageBusy}
+                      className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-[10.5px] text-accent transition-colors duration-500 ease-spring hover:bg-accent/20 disabled:opacity-50"
+                    >
+                      {triageBusy ? 'Applying…' : `Apply: ${TRIAGE_ACTIONS.find((x) => x.id === triageAction)?.label}`}
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           )}

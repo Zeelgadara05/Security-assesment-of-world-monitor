@@ -47,7 +47,7 @@ const TOOL_GROUPS = ['Recon', 'DNS', 'Service', 'HTTP', 'Vulnerability'];
 
 type AssessmentType = 'world_monitor' | 'custom_target' | '';
 
-const STEPS = ['Path', 'Configure', 'Authorize'];
+const STEPS = ['Path', 'Target & scope', 'Capabilities', 'Profile', 'Authorize'];
 
 const hostOf = (url: string): string => {
   try {
@@ -229,6 +229,10 @@ export const NewScan: React.FC = () => {
   const canConfigure = assessmentType !== '' && (assessmentType === 'world_monitor' ? !!wmTargetId : !!target.trim());
   const allowedToolsCount = TOOLS.filter((t) => selectedTools[t.id]).length;
   const canSubmit = canConfigure && acknowledged && allowedToolsCount > 0 && !loading;
+  const stepTargetValid = assessmentType !== '' && (
+    assessmentType === 'world_monitor' ? !!wmTargetId : !!target.trim()
+  );
+  const stepToolsValid = allowedToolsCount > 0;
 
   const handleTrigger = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -434,9 +438,12 @@ export const NewScan: React.FC = () => {
               </div>
             )}
 
-            {/* Step 2 — configure */}
+            {/* Step 2 — target & scope */}
             {step === 2 && assessmentType === 'custom_target' && (
               <div className="space-y-4">
+                <p className="text-[11.5px] leading-relaxed text-muted">
+                  The assessment engine only ever touches targets you have declared in the authorized scope.
+                </p>
                 <Input
                   label="Target host / IP / CIDR"
                   placeholder="sandbox.example.com, 192.168.1.1"
@@ -451,27 +458,16 @@ export const NewScan: React.FC = () => {
                     Not in declared scope yet — add it below before launching, or the server will reject it with 403.
                   </p>
                 )}
-                <ToolPicker
-                  selectedTools={selectedTools}
-                  toggleTool={toggleTool}
-                  disabled={loading}
-                  allowedToolsCount={allowedToolsCount}
-                />
-                <OptionsRow
-                  severity={severity}
-                  setSeverity={setSeverity}
-                  profile={profile}
-                  setProfile={setProfile}
-                  activeTesting={activeTesting}
-                  setActiveTesting={setActiveTesting}
-                  disabled={loading}
-                />
-                <WizardNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!canConfigure} />
+                <ScopeInline scopeList={scopeList} />
+                <WizardNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!stepTargetValid} />
               </div>
             )}
 
             {step === 2 && assessmentType === 'world_monitor' && (
               <div className="space-y-4">
+                <p className="text-[11.5px] leading-relaxed text-muted">
+                  Probes stay confined to the registered deployment host. The scope badge below shows the resolved assessment target.
+                </p>
                 <Select
                   label="Registered deployment"
                   value={wmTargetId}
@@ -511,12 +507,30 @@ export const NewScan: React.FC = () => {
                     </Button>
                   </div>
                 </details>
+                <ScopeInline scopeList={scopeList} />
+                <WizardNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!stepTargetValid} />
+              </div>
+            )}
+
+            {/* Step 3 — capabilities */}
+            {step === 3 && (
+              <div className="space-y-4">
+                <p className="text-[11.5px] leading-relaxed text-muted">
+                  Pick the scanners that drive detection. Missing binaries are recorded as gaps, never simulated.
+                </p>
                 <ToolPicker
                   selectedTools={selectedTools}
                   toggleTool={toggleTool}
                   disabled={loading}
                   allowedToolsCount={allowedToolsCount}
                 />
+                <WizardNav onBack={() => setStep(2)} onNext={() => setStep(4)} nextDisabled={!stepToolsValid} />
+              </div>
+            )}
+
+            {/* Step 4 — profile & severity */}
+            {step === 4 && (
+              <div className="space-y-4">
                 <OptionsRow
                   severity={severity}
                   setSeverity={setSeverity}
@@ -526,12 +540,12 @@ export const NewScan: React.FC = () => {
                   setActiveTesting={setActiveTesting}
                   disabled={loading}
                 />
-                <WizardNav onBack={() => setStep(1)} onNext={() => setStep(3)} nextDisabled={!canConfigure} />
+                <WizardNav onBack={() => setStep(3)} onNext={() => setStep(5)} nextDisabled={false} />
               </div>
             )}
 
-            {/* Step 3 — authorize */}
-            {step === 3 && (
+            {/* Step 5 — review & authorize */}
+            {step === 5 && (
               <div className="space-y-4">
                 <div className="space-y-2 rounded-xl border border-line p-3.5">
                   <SummaryRow label="Path" value={assessmentType === 'world_monitor' ? 'World Monitor deployment' : 'Custom authorized target'} />
@@ -568,7 +582,7 @@ export const NewScan: React.FC = () => {
                 )}
 
                 <div className="flex gap-2">
-                  <Button type="button" onClick={() => setStep(2)} disabled={loading || isRunning}>
+                  <Button type="button" onClick={() => setStep(4)} disabled={loading || isRunning}>
                     <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
                     Back
                   </Button>
@@ -580,7 +594,7 @@ export const NewScan: React.FC = () => {
               </div>
             )}
 
-            {step < 3 && error && (
+            {step < 5 && error && (
               <div className="flex gap-2 rounded-xl border border-critical/35 bg-critical/[0.07] px-3.5 py-3 text-[11.5px] leading-relaxed text-critical">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
                 <span>{error}</span>
@@ -801,6 +815,25 @@ const PathCard: React.FC<{
       <span className="mt-1 block text-[10.5px] leading-relaxed text-faint">{description}</span>
     </span>
   </button>
+);
+
+const ScopeInline: React.FC<{ scopeList: string[] }> = ({ scopeList }) => (
+  <div className="rounded-xl border border-line px-3 py-2.5">
+    <p className="eyebrow mb-1">Declared scope</p>
+    {scopeList.length === 0 ? (
+      <p className="text-[10.5px] text-faint leading-relaxed">
+        No scope declared yet — add targets from the Authorized Scope panel.
+      </p>
+    ) : (
+      <div className="flex flex-wrap gap-1.5">
+        {scopeList.map((entry) => (
+          <span key={entry} className="mono-cell rounded-md border border-line px-2 py-0.5 text-[10px] text-accent">
+            {entry}
+          </span>
+        ))}
+      </div>
+    )}
+  </div>
 );
 
 const SummaryRow: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (

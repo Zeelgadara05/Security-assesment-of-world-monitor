@@ -19,7 +19,14 @@ def _get_owned_report(db: Session, user: User, scan_id: int) -> Report:
 
 @router.get("/list")
 def list_reports(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Lists reports compiled for the authenticated user's scans only."""
+    """Lists reports compiled for the authenticated user's scans only.
+
+    Each entry also surfaces the most recent on-demand export's SHA-256 content
+    hash and fingerprints (Phase 9 reproducibility) when one exists on disk,
+    proving a served byte sequence can be regenerated deterministically.
+    """
+    from database.models import ReportExport
+
     project_ids = [p.id for p in db.query(Project).filter(Project.user_id == user.id).all()]
     if not project_ids:
         return []
@@ -27,12 +34,33 @@ def list_reports(user: User = Depends(get_current_user), db: Session = Depends(g
     if not scan_ids:
         return []
     reports = db.query(Report).filter(Report.scan_id.in_(scan_ids)).order_by(Report.created_at.desc()).all()
+
+    latest_by_scan: dict[int, ReportExport] = {}
+    for export in db.query(ReportExport).filter(ReportExport.scan_id.in_(scan_ids)).order_by(
+        ReportExport.generated_at.desc()
+    ).all():
+        if export.scan_id not in latest_by_scan:
+            latest_by_scan[export.scan_id] = export
+
     return [
         {
             "id": r.id,
             "scan_id": r.scan_id,
             "title": r.title,
-            "created_at": r.created_at
+            "created_at": r.created_at,
+            "content_hash": (latest_by_scan[r.scan_id].content_hash if r.scan_id in latest_by_scan else None),
+            "registry_fingerprint": (
+                latest_by_scan[r.scan_id].registry_fingerprint if r.scan_id in latest_by_scan else None
+            ),
+            "config_fingerprint": (
+                latest_by_scan[r.scan_id].config_fingerprint if r.scan_id in latest_by_scan else None
+            ),
+            "exported_at": (
+                latest_by_scan[r.scan_id].generated_at if r.scan_id in latest_by_scan else None
+            ),
+            "has_html": bool(r.html_content),
+            "has_pdf": bool(r.pdf_content),
+            "content_length": (latest_by_scan[r.scan_id].content_length if r.scan_id in latest_by_scan else None),
         }
         for r in reports
     ]

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
 import json
@@ -628,9 +628,41 @@ def get_scan_observations(scan_id: int, user: User = Depends(get_current_user), 
         {"id": o.id, "tool": o.tool_name, "kind": o.kind, "subject": o.subject,
          "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at,
          "observation_type": o.observation_type or o.kind, "source": o.source,
-         "status": o.status, "fingerprint": o.fingerprint,
+         "status": o.status, "fingerprint": o.fingerprint, "asset_id": o.asset_id,
          "request": o.request_json, "response": o.response_json}
         for o in rows
+    ]
+
+
+@router.get("/{scan_id}/assets")
+def get_scan_assets(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Asset graph rows linked to a scan's evidence (owned by the user).
+
+    Phase 9: deduplicated assets whose scan surfaced them first, with their
+    real parent edges and any sibling edges discoverable from linked
+    observations.  Nothing is invented: rows only exist if persistence put them
+    there.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    obs_rows = db.query(Observation).filter(Observation.scan_id == scan_id).all()
+    asset_ids = sorted({o.asset_id for o in obs_rows if o.asset_id})
+    scan_assets = (
+        db.query(Asset).filter(Asset.project_id == scan.project_id, Asset.scan_id == scan_id)
+        .order_by(Asset.id.asc()).all()
+    )
+    scoped = {a.id: a for a in scan_assets}
+    for aid in asset_ids:
+        row = db.query(Asset).filter(Asset.id == aid).first()
+        if row and row.id not in scoped:
+            scoped[row.id] = row
+    rows_sorted = sorted(scoped.values(), key=lambda a: a.id)
+    return [
+        {"id": a.id, "type": a.type, "value": a.value,
+         "source": a.source or (a.metadata_json or {}).get("source"),
+         "metadata": a.metadata_json or {}, "created_at": a.created_at,
+         "parent_asset_id": a.parent_asset_id,
+         "children": sorted({c.id for c in a.children}, key=lambda x: x)}
+        for a in rows_sorted
     ]
 
 
@@ -775,19 +807,23 @@ def get_scan_report(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Phase 6 report export (json|markdown).
+    """Phase 6 report export (json|markdown|html|pdf).
 
     The report is deterministic, built only from persisted state, and preserves
     finding ids, evidence ids, coverage, limitations, the registry fingerprint
-    and timestamps.  Each export is recorded with a content hash for reproducibility.
+    and timestamps.  Every export is recorded with a content hash for
+    reproducibility.  HTML and PDF are real, self-contained exports rendered
+    from the same deterministic section model.
     """
     scan = get_owned_scan(db, user, scan_id)
     fmt = (format or "json").lower()
-    if fmt not in ("json", "markdown"):
-        raise HTTPException(status_code=400, detail="format must be 'json' or 'markdown'.")
+    if fmt not in ("json", "markdown", "html", "pdf"):
+        raise HTTPException(status_code=400,
+                            detail="format must be 'json', 'markdown', 'html' or 'pdf'.")
 
     from app.reporting import builder as report_builder
     from app.reporting import export as report_export
+    from app.reporting import html_renderer, pdf_writer
 
     report = report_builder.build(db, scan)
     markdown = report.markdown
@@ -808,7 +844,9 @@ def get_scan_report(
         record_payload = payload
         content_json = json_payload
         content_markdown = None
-    else:
+        content_html = None
+        content_pdf = None
+    elif fmt == "markdown":
         payload = report_export.render_markdown(markdown)
         response = {
             "format": "markdown",
@@ -823,6 +861,56 @@ def get_scan_report(
         record_payload = payload
         content_json = None
         content_markdown = payload
+        content_html = None
+        content_pdf = None
+    elif fmt == "html":
+        sections = [_section_dict(s) for s in report.sections]
+        html_doc = html_renderer.render_html(
+            sections,
+            title=scan.target,
+            generated_at=report.generated_at,
+            fingerprint=report.registry_fingerprint,
+            config_fingerprint=report.config_fingerprint,
+        )
+        payload = report_export.render_html(html_doc)
+        response = {
+            "format": "html",
+            "scan_id": scan.id,
+            "target": scan.target,
+            "generated_at": report.generated_at,
+            "registry_fingerprint": report.registry_fingerprint,
+            "config_fingerprint": report.config_fingerprint,
+            "content_hash": report_export.content_hash(payload),
+            "report": payload,
+        }
+        record_payload = payload
+        content_json = None
+        content_markdown = None
+        content_html = html_doc
+        content_pdf = None
+    else:  # pdf
+        sections = [_section_dict(s) for s in report.sections]
+        pdf_bytes = pdf_writer.render_pdf(
+            sections,
+            title=f"Assessment Report - {scan.target}",
+            generated_at=report.generated_at,
+            fingerprint=report.registry_fingerprint or "",
+        )
+        response = {
+            "format": "pdf",
+            "scan_id": scan.id,
+            "target": scan.target,
+            "generated_at": report.generated_at,
+            "registry_fingerprint": report.registry_fingerprint,
+            "config_fingerprint": report.config_fingerprint,
+            "content_hash": report_export.content_hash_bytes(pdf_bytes),
+            "content_length": len(pdf_bytes),
+        }
+        record_payload = pdf_bytes
+        content_json = None
+        content_markdown = None
+        content_html = None
+        content_pdf = pdf_bytes
 
     report_export.persist_export(
         db,
@@ -831,11 +919,24 @@ def get_scan_report(
         payload=record_payload,
         content_json=content_json,
         content_markdown=content_markdown,
+        content_html=content_html,
+        content_pdf=content_pdf,
         registry_fingerprint=report.registry_fingerprint,
         config_fingerprint=report.config_fingerprint,
         user_id=str(getattr(user, "id", "")),
     )
+
+    if fmt == "pdf":
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=cyberagent_report_{scan.id}.pdf"},
+        )
     return response
+
+
+def _section_dict(section) -> dict:
+    return {"id": section.id, "title": section.title, "markdown": section.markdown}
 
 
 @router.get("/{scan_id}/stream")

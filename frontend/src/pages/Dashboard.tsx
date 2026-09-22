@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Radar, AlertTriangle, Target, Gauge, Network, ArrowRight } from 'lucide-react';
+import { Radar, AlertTriangle, Target, Network, ArrowRight, Footprints, Layers } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../api';
 import { PageHeader } from '../components/PageHeader';
@@ -15,15 +15,17 @@ import { relativeTime } from '../components/format';
 export const Dashboard: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
+  const [agg, setAgg] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [scanRes, summaryRes] = await Promise.all([
+      const [scanRes, summaryRes, aggRes] = await Promise.all([
         apiFetch('/scans/list'),
         apiFetch('/scans/summary'),
+        apiFetch('/dashboard/summary'),
       ]);
       if (scanRes.ok) {
         setScans(await scanRes.json());
@@ -34,6 +36,9 @@ export const Dashboard: React.FC = () => {
       }
       if (summaryRes.ok) {
         setSummary(await summaryRes.json());
+      }
+      if (aggRes.ok) {
+        setAgg(await aggRes.json());
       }
     } catch {
       setError('Server connection failed.');
@@ -94,15 +99,30 @@ export const Dashboard: React.FC = () => {
             {summary?.open_findings ?? 0}
           </StatTile>
         </Reveal>
-        <Reveal delay={0.1}>
+        <Reveal delay={0.08}>
           <StatTile
-            label="Avg Security Score"
-            icon={<Gauge className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
+            label="Validated Findings"
+            icon={<Radar className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
             loading={loading}
             iconTone="text-accent"
           >
-            {avgScore(summary?.score_history)}
-            <span className="text-[10px] font-normal text-faint">/100</span>
+            {agg?.confirmed_findings ?? 0}
+            <span className="text-[10px] font-normal text-faint">
+              {agg?.candidate_findings ? `+ ${agg.candidate_findings} candidates` : 'validated'}
+            </span>
+          </StatTile>
+        </Reveal>
+        <Reveal delay={0.1}>
+          <StatTile
+            label="Evidence Records"
+            icon={<Footprints className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
+            loading={loading}
+            iconTone="text-accent"
+          >
+            {agg?.observation_count ?? 0}
+            <span className="text-[10px] font-normal text-faint">
+              {agg?.assets_total ?? 0} assets
+            </span>
           </StatTile>
         </Reveal>
         <Reveal delay={0.15}>
@@ -157,6 +177,74 @@ export const Dashboard: React.FC = () => {
           </section>
         </Reveal>
       </div>
+
+      {/* Lifecycle + coverage trend */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Reveal>
+          <section className="panel h-full p-5">
+            <h2 className="mb-4 text-[12.5px] font-semibold text-text">Finding Lifecycle</h2>
+            {loading ? (
+              <Skeleton className="h-36 w-full" />
+            ) : (
+              <LifecycleBreakdown lifecycle={agg?.findings_lifecycle ?? {}} />
+            )}
+          </section>
+        </Reveal>
+        <Reveal className="lg:col-span-2">
+          <section className="panel h-full p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-[12.5px] font-semibold text-text">Coverage Trend</h2>
+            </div>
+            {loading ? (
+              <Skeleton className="h-36 w-full" />
+            ) : (agg?.coverage_trend ?? []).length === 0 ? (
+              <EmptyState
+                title="No coverage recorded yet"
+                description="Coverage is derived only from the persisted phase-7 scan ledger."
+              />
+            ) : (
+              <CoverageCurve trend={agg.coverage_trend} />
+            )}
+          </section>
+        </Reveal>
+      </div>
+
+      {/* Evidence chain */}
+      <Reveal>
+        <section className="panel overflow-hidden">
+          <div className="flex items-center justify-between px-5 pt-5 pb-3">
+            <h2 className="flex items-center gap-2 text-[12.5px] font-semibold text-text">
+              <Layers className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+              Observations (evidence chain)
+            </h2>
+            <span className="mono-cell text-[10px] text-faint">
+              {agg?.observation_count ?? 0} persisted · {agg?.assets_by_type?.asset ?? 0} assets
+            </span>
+          </div>
+          <div className="px-5 pb-5">
+            {loading ? (
+              <SkeletonTable rows={3} />
+            ) : Object.keys(agg?.observations_by_scan ?? {}).length === 0 ? (
+              <EmptyState
+                title="No observations persisted"
+                description="Run a real assessment; every observation is stored before any finding is derived."
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                {Object.entries(agg.observations_by_scan).sort(
+                  (a, b) => Number(b[1]) - Number(a[1]),
+                ).map(([scanId, count]) => (
+                  <div key={scanId} className="rounded-xl border border-line bg-surface-2 px-3 py-2.5">
+                    <span className="mono-cell block text-[9.5px] text-faint">assessment #{scanId}</span>
+                    <span className="tnum mt-0.5 block text-[20px] font-semibold leading-none text-text">{String(count)}</span>
+                    <span className="text-[10px] text-muted">observations</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </Reveal>
 
       {/* Recent scans */}
       <Reveal>
@@ -216,6 +304,14 @@ export const Dashboard: React.FC = () => {
                   ),
                 },
                 {
+                  key: 'evidence',
+                  label: 'Evidence',
+                  render: (s: any) => {
+                    const n = agg?.observations_by_scan?.[String(s.id)] ?? 0;
+                    return <span className="mono-cell text-[10.5px] text-faint">{n ? `${n} obs` : '—'}</span>;
+                  },
+                },
+                {
                   key: 'created',
                   label: 'Triggered',
                   render: (s: any) => <span className="text-[11px] text-faint">{relativeTime(s.created_at)}</span>,
@@ -257,11 +353,74 @@ const StatTile: React.FC<{
   </div>
 );
 
-function avgScore(history: any[] | undefined): string {
-  if (!history || history.length === 0) return '—';
-  const total = history.reduce((acc, h) => acc + (Number(h.score) || 0), 0);
-  return String(Math.round(total / history.length));
-}
+const LIFECYCLE_META: Array<[string, string]> = [
+  ['confirmed', 'Confirmed (validated)'],
+  ['candidate', 'Candidate (evidence-backed)'],
+  ['rejected', 'Rejected'],
+  ['duplicate', 'Duplicate'],
+  ['accepted', 'Accepted risk'],
+  ['remediated', 'Remediated'],
+];
+
+const LifecycleBreakdown: React.FC<{ lifecycle: Record<string, number> }> = ({ lifecycle }) => {
+  const total = Object.values(lifecycle).reduce((a, b) => a + b, 0);
+  if (total === 0) {
+    return (
+      <EmptyState
+        title="No findings tracked"
+        description="Lifecycle buckets populate from persisted finding status transitions."
+      />
+    );
+  }
+  const width = (n: number) => `${Math.max(2, Math.round((n / total) * 100))}%`;
+  return (
+    <div className="space-y-2.5">
+      {LIFECYCLE_META.map(([status, label]) => {
+        const n = lifecycle[status] ?? 0;
+        if (n === 0) return null;
+        const accent = status === 'confirmed' ? 'bg-accent'
+          : status === 'candidate' ? 'bg-high'
+          : status === 'rejected' ? 'bg-faint'
+          : 'bg-medium';
+        return (
+          <div key={status} className="flex items-center gap-2.5">
+            <span className="w-32 shrink-0 truncate text-[10.5px] text-muted">{label}</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
+              <div className={`h-full rounded-full ${accent}`} style={{ width: width(n) }} />
+            </div>
+            <span className="mono-cell w-6 text-right text-faint">{n}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const CoverageCurve: React.FC<{ trend: any[] }> = ({ trend }) => {
+  const max = Math.max(1, ...trend.map((t) => Number(t.coverage) || 0));
+  const recent = trend.slice(-8);
+  return (
+    <div className="flex h-36 items-end gap-2">
+      {recent.map((t, i) => {
+        const v = Math.max(0, Math.min(100, Number(t.coverage) || 0));
+        return (
+          <div key={t.scan_id ?? i} className="flex min-w-0 flex-1 flex-col items-center gap-1.5">
+            <span className="mono-cell text-[9px] text-faint">{Math.round(v)}%</span>
+            <div className="flex h-[6.5rem] w-full items-end overflow-hidden rounded-lg bg-surface-2">
+              <div
+                className="w-full rounded-lg bg-gradient-to-t from-accent/55 to-accent transition-[height] duration-700 ease-spring"
+                style={{ height: `${Math.max(4, (v / max) * 100)}%` }}
+              />
+            </div>
+            <span className="mono-cell w-full truncate text-center text-[8px] text-faint">
+              #{t.scan_id ?? ''}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 const ScoreBars: React.FC<{ history: any[] }> = ({ history }) => (
   <div className="flex h-36 items-end gap-2">

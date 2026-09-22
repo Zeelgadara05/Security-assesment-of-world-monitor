@@ -141,6 +141,11 @@ export const Reports: React.FC = () => {
                           <span className="block text-[11.5px] font-medium text-text leading-snug line-clamp-2">{rep.title}</span>
                           <span className="mono-cell text-[10px] text-faint mt-1 block">assessment #{rep.scan_id}</span>
                           <span className="mono-cell text-[9px] text-faint block">{formatDate(rep.created_at)}</span>
+                          {rep.content_hash && (
+                            <span className="mono-cell text-[9px] text-accent mt-0.5 block">
+                              sha256: {String(rep.content_hash).slice(0, 16)}…
+                            </span>
+                          )}
                         </button>
                       </li>
                     );
@@ -161,6 +166,14 @@ export const Reports: React.FC = () => {
               </div>
               {selected && (
                 <div className="flex items-center gap-2">
+                  {selected.content_hash && (
+                    <span
+                      className="mono-cell rounded-full border border-accent/30 bg-accent/5 px-2.5 py-0.5 text-[9.5px] text-accent"
+                      title={`fingerprint: ${selected.registry_fingerprint || '—'} / ${selected.config_fingerprint || '—'}`}
+                    >
+                      export sha256: {String(selected.content_hash).slice(0, 20)}…
+                    </span>
+                  )}
                   {execMeta?.version && (
                     <span className="mono-cell rounded-full border border-line px-2.5 py-0.5 text-[9.5px] text-faint">
                       exec: {execMeta.version} · {execMeta.stages} stages · {execMeta.tools} tools · {execMeta.findings}{' '}
@@ -220,6 +233,14 @@ export const Reports: React.FC = () => {
                 >
                   <Download className="w-3 h-3" aria-hidden="true" />
                   JSON
+                </a>
+                <a
+                  href={authUrl(`/reports/${selectedScanId}/pdf`)}
+                  download={`cyberagent_report_${selectedScanId}.pdf`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text"
+                >
+                  <Download className="w-3 h-3" aria-hidden="true" />
+                  PDF
                 </a>
                 <a
                   href={authUrl(`/reports/${selectedScanId}/html`)}

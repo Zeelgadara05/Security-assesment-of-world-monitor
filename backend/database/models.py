@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Float, JSON, Boolean, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
 Base = declarative_base()
 
@@ -47,16 +47,32 @@ class Session(Base):
 
 
 class Asset(Base):
+    """An asset discovered for a project.
+
+    ``type`` distinguishes the classes the platform records: domain, ip, port,
+    tech, host, service, endpoint.  ``parent_asset_id`` (Phase 9) links
+    discovered facts into the asset graph (host -> service -> endpoint, or an
+    endpoint owned by a host), so every edge is a *real* parent/child link to
+    a persisted row that also exists.  ``source`` records how the asset was
+    discovered (scan probe, external tool, world monitor, operator) and
+    ``scan_id`` the scan that first surfaced it, both nullable and additive.
+    """
     __tablename__ = "assets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    type = Column(String(50), nullable=False)  # "domain", "ip", "port", "tech"
+    type = Column(String(50), nullable=False)  # "domain", "ip", "port", "tech", "host", "service", "endpoint"
     value = Column(String(255), nullable=False)  # e.g., "api.target.com", "192.168.1.1", "80/tcp"
     metadata_json = Column(JSON, default=dict)  # e.g., technology details, port status
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Phase 9 asset graph (additive, nullable).
+    parent_asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True)
+    source = Column(String(100), nullable=True)  # how the asset was discovered
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=True)  # scan that first surfaced it
+
     project = relationship("Project", back_populates="assets")
+    children = relationship("Asset", backref=backref("parent", remote_side=[id]))
 
 
 class Scan(Base):
@@ -121,9 +137,18 @@ class Scan(Base):
     authorization_acknowledged = Column(Boolean, nullable=True)
     authorization_acknowledged_at = Column(DateTime, nullable=True)
 
+    # Phase 9: schedule + attempt metadata (additive).  ``schedule_cadence`` is
+    # an operator hint (e.g. "daily", "weekly", "manual"); retries/schedules are
+    # traced in ``scan_attempts``, the {attempt_number, started_at, finished_at,
+    # status, result} audit trail shared by interactive retries and scheduled
+    # reruns (never fabricated: each row describes one real enqueued execution).
+    schedule_cadence = Column(String(50), nullable=True)
+    attempt_count = Column(Integer, nullable=True, default=1)
+
     executions = relationship("ToolExecution", back_populates="scan", cascade="all, delete-orphan")
     scan_stages = relationship("ScanStage", back_populates="scan", cascade="all, delete-orphan")
     scan_events = relationship("ScanEvent", back_populates="scan", cascade="all, delete-orphan")
+    attempts = relationship("ScanAttempt", back_populates="scan", cascade="all, delete-orphan")
 
 
 class ToolResult(Base):
@@ -219,9 +244,16 @@ class Vulnerability(Base):
     last_scan_id = Column(Integer, nullable=True)
     occurrence_count = Column(Integer, nullable=True, default=1)
 
+    # Phase 9 asset provenance (additive): which persisted asset the finding
+    # concerns, plus the CVE correlation state.  ``cve_status`` distinguishes
+    # an observed CVE from one merely correlated by fingerprint.
+    endpoint_asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True, index=True)
+    cve_status = Column(String(20), nullable=True)  # observed | potentially_affected | confirmed
+
     scan = relationship("Scan", back_populates="vulnerabilities")
     evidence_records = relationship("FindingEvidence", back_populates="finding", cascade="all, delete-orphan")
     status_history = relationship("FindingStatusHistory", back_populates="finding", cascade="all, delete-orphan")
+    endpoint_asset = relationship("Asset", foreign_keys=[endpoint_asset_id])
 
 
 class Observation(Base):
@@ -266,7 +298,11 @@ class Observation(Base):
     observed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Phase 9: link the observation onto the project's asset graph (additive).
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True, index=True)
+
     scan = relationship("Scan", back_populates="observations")
+    graph_asset = relationship("Asset", foreign_keys=[asset_id])
 
 
 class Report(Base):
@@ -404,6 +440,10 @@ class ReportExport(Base):
     generated_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
     content_json = Column(JSON, nullable=True)
     content_markdown = Column(Text, nullable=True)
+    # Phase 9: the HTML and PDF projections are persisted too, so any export
+    # format can be re-served or audited byte-for-byte.
+    content_html = Column(Text, nullable=True)
+    content_pdf = Column(LargeBinary, nullable=True)
 
     scan = relationship("Scan", back_populates="report_exports")
 
@@ -692,3 +732,27 @@ class WorldMonitorAPIEndpoint(Base):
 
     target = relationship("WorldMonitorTarget", back_populates="api_endpoints")
     observation = relationship("Observation")
+
+
+class ScanAttempt(Base):
+    """One real enqueued execution of a scan (Phase 9, additive).
+
+    Every time a scan runs -- initial trigger, an interactive retry, or a
+    scheduled rerun -- a row is appended describing that one execution.  The
+    counter on ``Scan`` is derived from these rows, so retries and schedules
+    never hide behind a single ``scans`` row.  Status vocabulary mirrors the
+    scan lifecycle (queued/running/completed/partial/failed/cancelled).
+    """
+    __tablename__ = "scan_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    trigger = Column(String(50), nullable=True)  # manual | retry | schedule
+    status = Column(String(50), nullable=False, default="queued")
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    result = Column(JSON, nullable=True)  # {state, coverage, findings, error}
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="attempts")

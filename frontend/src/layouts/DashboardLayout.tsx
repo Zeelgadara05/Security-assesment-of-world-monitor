@@ -17,6 +17,7 @@ import {
   X,
   Crosshair,
   ArrowLeft,
+  Globe,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
@@ -42,6 +43,7 @@ const NAV_GROUPS = [
       { name: 'Overview', path: '/', icon: LayoutDashboard },
       { name: 'Assessments', path: '/scans', icon: ShieldCheck },
       { name: 'Findings', path: '/findings', icon: ShieldAlert },
+      { name: 'World Monitor', path: '/world-monitor', icon: Globe },
       { name: 'Reports', path: '/reports', icon: FileText },
     ],
   },

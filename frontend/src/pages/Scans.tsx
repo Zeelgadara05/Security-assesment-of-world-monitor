@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Layers,
   Terminal,
@@ -8,6 +9,10 @@ import {
   ChevronRight,
   RotateCw,
   FileDown,
+  Activity,
+  FileText,
+  Boxes,
+  GitBranch,
 } from 'lucide-react';
 import { apiFetch, authUrl } from '../api';
 import { PageHeader } from '../components/PageHeader';
@@ -64,6 +69,7 @@ const dedupeTools = (rows: any[]): any[] => {
 };
 
 export const Scans: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [scans, setScans] = useState<any[]>([]);
   const [selectedScan, setSelectedScan] = useState<any | null>(null);
   const [vulnerabilities, setVulnerabilities] = useState<any[]>([]);
@@ -81,8 +87,19 @@ export const Scans: React.FC = () => {
   const [reportExport, setReportExport] = useState<{ markdown: string; hash: string; generated_at: string } | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [consoleMode, setConsoleMode] = useState<'classic' | 'phase7'>('classic');
+  const [workspaceTab, setWorkspaceTab] = useState<'overview' | 'console' | 'observations' | 'findings' | 'assets'>('overview');
+  const [observations, setObservations] = useState<any[]>([]);
+  const [assets, setAssets] = useState<any[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
+
+  const TAB_ITEMS: { id: typeof workspaceTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'overview', label: 'Overview', icon: <Activity className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'console', label: 'Live Console', icon: <Terminal className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'observations', label: `Observations`, icon: <FileText className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'findings', label: `Findings`, icon: <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'assets', label: 'Assets', icon: <Boxes className="w-3.5 h-3.5" aria-hidden="true" /> },
+  ];
 
   const fetchScans = async () => {
     setLoading(true);
@@ -111,6 +128,8 @@ export const Scans: React.FC = () => {
     setFindingDetails({});
     setAssessmentSummary(null);
     setReportExport(null);
+    setObservations([]);
+    setAssets([]);
     try {
       const res = await apiFetch(`/scans/${id}`);
       if (res.ok) {
@@ -134,6 +153,24 @@ export const Scans: React.FC = () => {
       if (res.ok) setAssessmentSummary(await res.json());
     } catch (err) {
       console.error('Error fetching assessment summary:', err);
+    }
+    try {
+      const res = await apiFetch(`/scans/${id}/observations`);
+      if (res.ok) {
+        const data = await res.json();
+        setObservations(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching observations:', err);
+    }
+    try {
+      const res = await apiFetch(`/scans/${id}/assets`);
+      if (res.ok) {
+        const data = await res.json();
+        setAssets(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching assets:', err);
     }
   };
 
@@ -247,6 +284,15 @@ export const Scans: React.FC = () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
     };
   }, []);
+
+  useEffect(() => {
+    const wanted = searchParams.get('scan');
+    if (wanted && scans.length > 0 && !selectedScan) {
+      const match = scans.find((s) => String(s.id) === wanted);
+      if (match) handleSelectScan(match.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, scans, selectedScan]);
 
   useEffect(() => {
     if (liveRef.current) liveRef.current.scrollTop = liveRef.current.scrollHeight;
@@ -492,8 +538,41 @@ export const Scans: React.FC = () => {
                   )}
                 </div>
 
+                {/* Workspace tab bar */}
+                <div className="flex items-center gap-1 overflow-x-auto border-b border-line -mb-px">
+                  {TAB_ITEMS.map((tab) => {
+                    const active = workspaceTab === tab.id;
+                    const count =
+                      tab.id === 'findings'
+                        ? vulnerabilities.length
+                        : tab.id === 'observations'
+                        ? observations.length
+                        : tab.id === 'assets'
+                        ? assets.length
+                        : null;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setWorkspaceTab(tab.id)}
+                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-2 text-[11.5px] transition-colors duration-500 ease-spring ${
+                          active
+                            ? 'border-accent text-text'
+                            : 'border-transparent text-faint hover:text-muted'
+                        }`}
+                        aria-selected={active}
+                      >
+                        {tab.icon}
+                        {tab.label}
+                        {count !== null && count > 0 && (
+                          <span className="mono-cell rounded-full border border-line px-1.5 text-[9px]">{count}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 {/* SIH26163 security-area coverage */}
-                {sih?.areas?.length ? (
+                {workspaceTab === 'overview' && sih?.areas?.length ? (
                   <div className="panel p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[12.5px] font-semibold text-text">SIH26163 security-area coverage</h3>
@@ -537,8 +616,8 @@ export const Scans: React.FC = () => {
                   </div>
                 ) : null}
 
-                {/* Phase 6 assessment + completeness */}
-                {consoleMode === 'classic' && (
+                {/* Overview tab: Phase 6 assessment + tool pipeline */}
+                {workspaceTab === 'overview' && (
                 <>
                 {selectedScan.assessment?.coverage && (
                   <div className="panel p-4">
@@ -701,8 +780,40 @@ export const Scans: React.FC = () => {
                     </div>
                   )}
                 </div>
+                </>
+                )}
 
-                {/* Findings */}
+                {/* Observations tab */}
+                {workspaceTab === 'observations' && (
+                  <div className="panel p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[12.5px] font-semibold text-text">Observations ({observations.length})</h3>
+                      <span className="eyebrow">persisted evidence</span>
+                    </div>
+                    {observations.length === 0 ? (
+                      <p className="text-[11px] text-faint">No persisted observations for this assessment yet.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[540px] overflow-y-auto">
+                        {observations.map((o) => (
+                          <div key={o.id} className="rounded-xl border border-line px-3 py-2.5">
+                            <div className="flex flex-wrap items-center gap-2 mb-1">
+                              <span className="mono-cell text-[10px] text-accent">{o.kind}</span>
+                              <span className="mono-cell text-[10px] text-faint">#{o.id}</span>
+                              <span className="mono-cell text-[10px] text-muted">{o.tool}</span>
+                              <span className="mono-cell text-[10px] text-faint">{o.status || 'recorded'}</span>
+                              {o.asset_id && <span className="mono-cell text-[10px] text-faint">asset #{o.asset_id}</span>}
+                              <span className="mono-cell text-[9.5px] text-faint ml-auto">{formatDateTime(o.created_at)}</span>
+                            </div>
+                            <p className="text-[11px] text-muted break-words" title={o.subject}>{o.subject}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Findings tab */}
+                {workspaceTab === 'findings' && (
                 <div className="panel p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-[12.5px] font-semibold text-text">
@@ -782,32 +893,73 @@ export const Scans: React.FC = () => {
                     </>
                   )}
                 </div>
+                )}
 
-                {/* Live events + logs */}
-                {(liveEvents.length > 0 || logs) && (
+                {/* Live Console tab */}
+                {workspaceTab === 'console' && (
                   <>
-                    <div className="panel p-4">
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                        <span className="text-[12.5px] font-semibold text-text">Live events</span>
-                      </div>
-                      <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-accent/90">
-                        {liveEvents.length === 0 ? '// waiting…' : liveEvents.join('\n')}
-                      </pre>
-                    </div>
-                    <div className="panel p-4">
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
-                        <span className="text-[12.5px] font-semibold text-text">Execution logs</span>
-                      </div>
-                      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-muted">
-                        {logs || '// No logs yet.'}
-                      </pre>
-                    </div>
+                    {(liveEvents.length > 0 || logs) && (
+                      <>
+                        <div className="panel p-4">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                            <span className="text-[12.5px] font-semibold text-text">Live events</span>
+                          </div>
+                          <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-accent/90">
+                            {liveEvents.length === 0 ? '// waiting…' : liveEvents.join('\n')}
+                          </pre>
+                        </div>
+                        <div className="panel p-4">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Terminal className="w-3.5 h-3.5 text-faint" aria-hidden="true" />
+                            <span className="text-[12.5px] font-semibold text-text">Execution logs</span>
+                          </div>
+                          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-line bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-muted">
+                            {logs || '// No logs yet.'}
+                          </pre>
+                        </div>
+                      </>
+                    )}
+                    {consoleMode === 'phase7'
+                      ? <Phase7Console scanId={selectedScan.id} />
+                      : liveEvents.length === 0 && !logs
+                      ? <p className="text-[11px] text-faint">No console activity yet for this assessment.</p>
+                      : null}
                   </>
                 )}
-                </>)}
-                {consoleMode === 'phase7' && <Phase7Console scanId={selectedScan.id} />}
+
+                {/* Assets tab */}
+                {workspaceTab === 'assets' && (
+                  <div className="panel p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[12.5px] font-semibold text-text">Asset graph ({assets.length})</h3>
+                      <span className="eyebrow mb-1">built from persisted observations</span>
+                    </div>
+                    {assets.length === 0 ? (
+                      <p className="text-[11px] text-faint">No assets surfaced for this assessment yet.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[540px] overflow-y-auto">
+                        {assets.map((a) => (
+                          <div key={a.id} className="rounded-xl border border-line px-3 py-2.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="mono-cell text-[10px] text-accent">{a.type}</span>
+                              <span className="font-mono text-[11px] text-text break-all">{a.value}</span>
+                              <span className="mono-cell text-[9.5px] text-faint ml-auto">#{a.id}</span>
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[9.5px] text-faint">
+                              {a.source && <span>source: {a.source}</span>}
+                              {a.parent_asset_id && <span>parent: #{a.parent_asset_id}</span>}
+                              {a.children?.length > 0 && (
+                                <span>children: {a.children.map((c: number) => `#${c}`).join(', ')}</span>
+                              )}
+                              <span>{formatDate(a.created_at)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
